@@ -227,18 +227,41 @@
     return '';
   }
 
-  function shortPath(p: string, tool?: string): string {
+  function formatTargetPath(p: string, tool?: string, cwdPath?: string | null): string {
     if (tool === 'bash') {
-      let out = p.replace(/['"]+/g, '').replace(/\s+/g, ' ');
-      if (out.length > 50) out = out.slice(0, 47) + '...';
-      return out;
+      return p.replace(/['"]+/g, '').replace(/\s+/g, ' ');
     }
     let clean = p.replace(/['"]+/g, '').replace(/\\/g, '/');
-    const parts = clean.split('/');
-    let out = parts.length > 2 ? parts.slice(-2).join('/') : clean;
-    if (out.length > 50) out = out.slice(0, 47) + '...';
-    return out;
+    if (cwdPath) {
+      const normalizedCwd = cwdPath.replace(/\\/g, '/').replace(/\/$/, '');
+      if (clean.startsWith(normalizedCwd + '/')) {
+        clean = clean.slice(normalizedCwd.length + 1);
+      }
+    }
+    return clean;
   }
+
+  $: lineRangeStr = (() => {
+    if (hasEditDiff && inlineLines.length > 0) {
+      const validNos = inlineLines
+        .map((l) => l.lineNo)
+        .filter((n) => typeof n === 'number' && n > 0);
+      if (validNos.length > 0) {
+        const min = Math.min(...validNos);
+        const max = Math.max(...validNos);
+        return min === max ? `:${min}` : `:${min}-${max}`;
+      }
+    }
+    if (entry.toolInput?.offset != null) {
+      return `:${entry.toolInput.offset}`;
+    }
+    if (entry.toolInput?.line != null) {
+      return `:${entry.toolInput.line}`;
+    }
+    return '';
+  })();
+
+  $: fullTargetDisplay = target ? `${formatTargetPath(target, toolClass, cwd)}${lineRangeStr}` : '';
 
   /** Split file content into add-diff lines, dropping the trailing empty entry
    * that `split('\n')` yields when the content ends with a newline (which would
@@ -378,7 +401,7 @@
       <span class="tc-tool">{entry.tool ?? 'tool'}</span>
       {#if target}
         <span class="tc-sep">→</span>
-        <span class="tc-target">{shortPath(target, toolClass)}</span>
+        <span class="tc-target">{fullTargetDisplay}</span>
       {/if}
     </button>
     <span class="tc-spacer"></span>
@@ -525,7 +548,7 @@
           <span class="tool {toolClass}">{entry.tool}</span>
           {#if target}
             <span class="tc-sep">→</span>
-            <span class="target mono">{shortPath(target, toolClass)}</span>
+            <span class="target mono">{fullTargetDisplay}</span>
           {/if}
         </div>
         <button class="modal-close" onclick={() => (modalOpen = false)}>✕</button>

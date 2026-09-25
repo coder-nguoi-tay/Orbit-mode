@@ -1,3 +1,4 @@
+pub mod codex_quota;
 pub mod crypto;
 pub mod database;
 pub mod diff_manager;

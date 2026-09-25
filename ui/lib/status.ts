@@ -115,11 +115,39 @@ const MODEL_NAMES: Record<string, string> = {
   'claude-opus-4-6[1m]': 'Opus 4.6 (1M)',
   'claude-sonnet-4-6': 'Sonnet 4.6',
   'claude-haiku-4-5-20251001': 'Haiku 4.5',
+  'gpt-5.5': 'GPT-5.5',
+  'gpt-5.4': 'GPT-5.4',
+  'gpt-5.3': 'GPT-5.3',
+  'gpt-5': 'GPT-5',
+  'gpt-4o': 'GPT-4o',
+  'gpt-4o-mini': 'GPT-4o Mini',
+  'o3-mini': 'o3-mini',
+  'o1-preview': 'o1-preview',
+  'o1-mini': 'o1-mini',
 };
 
 export function modelDisplayName(modelId: string | null): string {
   if (!modelId) return '—';
-  return MODEL_NAMES[modelId] ?? modelId;
+  if (MODEL_NAMES[modelId]) return MODEL_NAMES[modelId];
+
+  // Dynamic formatting for claude-* models
+  if (modelId.startsWith('claude-')) {
+    const withoutPrefix = modelId.slice('claude-'.length);
+    const parts = withoutPrefix.split('-');
+    if (parts.length >= 2) {
+      const family = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+      const version = parts.slice(1).join('.');
+      return `${family} ${version}`;
+    }
+  }
+
+  // Dynamic formatting for gpt-* models
+  if (modelId.startsWith('gpt-')) {
+    const withoutPrefix = modelId.slice('gpt-'.length);
+    return `GPT-${withoutPrefix}`;
+  }
+
+  return modelId;
 }
 
 /** Short model name for space-constrained UI (sidebar, header, meta panel).
@@ -127,8 +155,8 @@ export function modelDisplayName(modelId: string | null): string {
  *  Truncates to maxLen with "…" if still too long. Full name available via title attr. */
 export function modelShortName(modelId: string | null, maxLen = 18): string {
   if (!modelId) return '—';
-  const display = MODEL_NAMES[modelId];
-  if (display) return display;
+  const display = modelDisplayName(modelId);
+  if (display && display.length <= maxLen) return display;
   // Strip provider prefix (e.g. "minimax/minimax-m2.5:free" → "minimax-m2.5:free")
   const short = modelId.includes('/') ? modelId.split('/').pop()! : modelId;
   if (short.length > maxLen) return short.slice(0, maxLen - 1) + '…';

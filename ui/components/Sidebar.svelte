@@ -16,9 +16,31 @@
   import { expandedParentSessions } from '../lib/stores/mcp-ui';
   import { sidebarVisible } from '../lib/stores/preferences';
   import { sidebarToggleHint } from '../lib/shortcuts';
-  import { fly } from '../lib/motion';
   import { Activity, Settings } from 'lucide-svelte';
   import { usageCenterOpen } from '../lib/stores/usage';
+  import { pipelines, activePipelineId, openPipeline } from '../lib/stores/pipelines';
+  import PipelineCreateDialog from './PipelineCreateDialog.svelte';
+
+  let showPipelineDialog = false;
+
+  const pipelineStatusIcon: Record<string, string> = {
+    created: '○',
+    preflight: '◎',
+    planning: '●',
+    plan_ready: '●',
+    implementing: '●',
+    reviewing: '●',
+    changes_requested: '!',
+    testing: '●',
+    test_failed: '!',
+    final_review: '●',
+    quality_gate: '●',
+    ready_for_human: '👤',
+    completed: '✓',
+    paused: '║',
+    failed: '✗',
+    cancelled: '—',
+  };
 
   let appVersion = '';
   import OrbitLogo from '../lib/assets/orbit.svg?raw';
@@ -177,6 +199,13 @@
   );
 </script>
 
+{#if showPipelineDialog}
+  <PipelineCreateDialog
+    on:done={() => (showPipelineDialog = false)}
+    on:cancel={() => (showPipelineDialog = false)}
+  />
+{/if}
+
 {#if showModal}
   <NewSessionModal
     on:done={(e) => {
@@ -200,8 +229,7 @@
             confirmDelete = null;
             await deleteSession(id);
             sessions.update((l) => l.filter((s) => s.id !== id));
-          }}>delete</button
-        >
+          }}>delete</button>
       </div>
     </div>
   </div>
@@ -239,7 +267,7 @@
   />
 {/if}
 
-<aside class="sidebar" data-testid="quiet-sidebar" transition:fly={{ x: -292 }}>
+<aside class="sidebar" data-testid="quiet-sidebar">
   <header class="header quiet-header">
     <div class="brand">
       <span class="brand-logo" data-testid="orbit-brand-icon">{@html OrbitLogo}</span>
@@ -273,8 +301,7 @@
         class="collapse-btn"
         on:click={() => sidebarVisible.set(false)}
         title="Hide sidebar ({sidebarToggleHint()})"
-        aria-label="Hide sidebar">‹</button
-      >
+        aria-label="Hide sidebar">‹</button>
     </div>
   </header>
 
@@ -289,13 +316,25 @@
     spellcheck="false"
   />
 
-  <button
-    type="button"
-    class="new-session-btn"
-    aria-label="New session"
-    data-testid="new-session-button"
-    on:click={() => (showModal = true)}>+ New session</button
-  >
+  <div class="new-btns">
+    <button
+      type="button"
+      class="new-session-btn"
+      aria-label="New session"
+      data-testid="new-session-button"
+      on:click={() => (showModal = true)}
+    >
+      + Session
+    </button>
+    <button
+      type="button"
+      class="new-session-btn pipeline-btn"
+      aria-label="New pipeline"
+      on:click={() => (showPipelineDialog = true)}
+    >
+      + Pipeline
+    </button>
+  </div>
 
   {#if pinnedList.length > 0}
     <section class="session-section" aria-label="Pinned sessions">
@@ -341,6 +380,27 @@
       {/if}
     </div>
   </section>
+
+  {#if $pipelines.length > 0}
+    <section class="session-section" aria-label="Pipelines">
+      <div class="section-label">Pipelines</div>
+      <div class="session-list">
+        {#each $pipelines as p}
+          <button
+            class="pipeline-item"
+            class:active={$activePipelineId === p.id}
+            on:click={() => openPipeline(p.id)}
+            title={p.userRequest}
+          >
+            <span class="pipeline-item-icon status-icon-{p.status}">
+              {pipelineStatusIcon[p.status] ?? '○'}
+            </span>
+            <span class="pipeline-item-name">{p.name}</span>
+          </button>
+        {/each}
+      </div>
+    </section>
+  {/if}
 
   <footer class="footer quiet-footer">
     <SidebarFooterHints />
@@ -447,6 +507,69 @@
   .collapse-btn:hover {
     color: var(--t0);
   }
+  .new-btns {
+    display: flex;
+    gap: 6px;
+  }
+  .new-btns .new-session-btn {
+    flex: 1;
+  }
+
+  .pipeline-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: var(--t1);
+    font-size: 12px;
+    font-family: var(--mono);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pipeline-item:hover {
+    background: color-mix(in srgb, var(--t0), transparent 94%);
+  }
+  .pipeline-item.active {
+    background: color-mix(in srgb, var(--ac), transparent 88%);
+    color: var(--ac);
+  }
+  .pipeline-item-icon {
+    flex-shrink: 0;
+    font-size: 11px;
+    width: 14px;
+    text-align: center;
+  }
+  .pipeline-item-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .status-icon-completed {
+    color: var(--success, #4ade80);
+  }
+  .status-icon-ready_for_human {
+    color: var(--success, #4ade80);
+  }
+  .status-icon-failed {
+    color: var(--error, #f87171);
+  }
+  .status-icon-cancelled {
+    color: var(--t3);
+  }
+  .status-icon-paused,
+  .status-icon-changes_requested,
+  .status-icon-test_failed {
+    color: var(--warning, #fb923c);
+  }
+
   .new-session-btn {
     display: block;
     width: 100%;

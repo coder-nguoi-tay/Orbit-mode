@@ -14,6 +14,8 @@
     ShieldAlert,
     ExternalLink,
     HelpCircle,
+    ChevronDown,
+    ChevronRight,
   } from 'lucide-svelte';
   import Modal from './shared/Modal.svelte';
   import {
@@ -37,10 +39,7 @@
   } from '../lib/cost';
   import { modelShortName, sessionStatusDotColor } from '../lib/status';
   import type { SessionUsageSnapshot, ProviderQuota } from '../lib/types';
-  import {
-    getProviderAccountAutoHandoff,
-    setProviderAccountAutoHandoff,
-  } from '../lib/tauri/accounts';
+  import { setDefaultProviderAccount } from '../lib/tauri/accounts';
 
   export let onClose: () => void = () => usageCenterOpen.set(false);
 
@@ -49,47 +48,20 @@
   let sortField: SortField = 'tokens';
   let sortAsc = false;
   let activeTab: 'agents' | 'projects' | 'models' = 'agents';
-  let automaticHandoffAccounts: Record<string, boolean> = {};
+  let quotasExpanded = false;
 
   onMount(async () => {
     await refreshProviderAccounts();
     await refreshUsageOverview();
-    await loadAutomaticHandoffStates();
   });
 
-  /** Load automatic handoff checkbox states for the quota cards.
-   * @return Completion after the account preferences are loaded.
-   * @throws Displays no UI error; the cards remain unchecked when the command is unavailable.
-   * @author ductv <ductv@getflycrm.com>
-   * @since 2026-09-26
-   */
-  async function loadAutomaticHandoffStates(): Promise<void> {
-    const accounts = Object.values($providerAccounts).filter(
-      (account) => account.providerId === 'codex'
-    );
-    const entries = await Promise.all(
-      accounts.map(
-        async (account) => [account.id, await getProviderAccountAutoHandoff(account.id)] as const
-      )
-    );
-    automaticHandoffAccounts = Object.fromEntries(entries);
-  }
-
-  /** Save one quota card's automatic handoff checkbox state.
-   * @param accountId The Codex account whose checkbox changed.
-   * @param enabled Whether this account may receive automatic handoff.
-   * @return Completion after the backend saves the preference.
-   * @throws Restores the previous state when the backend rejects the change.
-   * @author ductv <ductv@getflycrm.com>
-   * @since 2026-09-26
-   */
-  async function toggleAutomaticHandoff(accountId: string, enabled: boolean): Promise<void> {
-    const previous = automaticHandoffAccounts[accountId] ?? false;
-    automaticHandoffAccounts = { ...automaticHandoffAccounts, [accountId]: enabled };
+  /** Set this account as the default so new sessions use its quota. */
+  async function selectActiveAccount(accountId: string): Promise<void> {
     try {
-      await setProviderAccountAutoHandoff(accountId, enabled);
+      await setDefaultProviderAccount(accountId);
+      await refreshProviderAccounts();
     } catch {
-      automaticHandoffAccounts = { ...automaticHandoffAccounts, [accountId]: previous };
+      /* backend rejected — UI stays unchanged */
     }
   }
 
@@ -102,8 +74,58 @@
     }
   }
 
-  // Reactive provider quotas
-  $: codexQuotas = $providerQuotas.filter((quota: ProviderQuota) => quota.provider === 'codex');
+  // Merge persisted quotas with the latest rate-limit state from active sessions.
+  let codexQuotas: ProviderQuota[] = [];
+  $: {
+    const quotasByAccount = new Map<string, ProviderQuota>();
+    for (const quota of $providerQuotas) {
+      quotasByAccount.set(
+        `${quota.provider}:${quota.providerAccountId ?? quota.accountKey}`,
+        quota
+      );
+    }
+    for (const session of $sessions) {
+      if (session.provider !== 'codex' || !session.rateLimit?.length) continue;
+      const accountKey = session.providerAccountId ?? 'default';
+      const fiveHourLimit = session.rateLimit.find((limit) => limit.rateLimitType === 'five_hour');
+      const sevenDayLimit = session.rateLimit.find((limit) => limit.rateLimitType === 'seven_day');
+      const liveQuota: ProviderQuota = {
+        provider: 'codex',
+        accountKey,
+        providerAccountId: session.providerAccountId,
+        fiveHour: fiveHourLimit
+          ? {
+              utilization: fiveHourLimit.utilization,
+              resetsAt: fiveHourLimit.resetsAt,
+              status: fiveHourLimit.status,
+            }
+          : null,
+        sevenDay: sevenDayLimit
+          ? {
+              utilization: sevenDayLimit.utilization,
+              resetsAt: sevenDayLimit.resetsAt,
+              status: sevenDayLimit.status,
+            }
+          : null,
+        updatedAt: session.updatedAt,
+        source: 'session_event',
+      };
+      const quotaKey = `codex:${accountKey}`;
+      const persistedQuota = quotasByAccount.get(quotaKey);
+      quotasByAccount.set(
+        quotaKey,
+        persistedQuota
+          ? {
+              ...persistedQuota,
+              providerAccountId: persistedQuota.providerAccountId ?? liveQuota.providerAccountId,
+              fiveHour: persistedQuota.fiveHour ?? liveQuota.fiveHour,
+              sevenDay: persistedQuota.sevenDay ?? liveQuota.sevenDay,
+            }
+          : liveQuota
+      );
+    }
+    codexQuotas = [...quotasByAccount.values()].filter((quota) => quota.provider === 'codex');
+  }
   $: codexQuotaCards = (() => {
     const codexAccounts = Object.values($providerAccounts).filter(
       (account) => account.providerId === 'codex'
@@ -125,12 +147,13 @@
       ];
     }
     return codexAccounts.map((account) => {
-      const matched = codexQuotas.find(
-        (quota) =>
-          quota.providerAccountId === account.id ||
-          quota.accountKey === account.id ||
-          (account.isDefault && (quota.accountKey === 'default' || !quota.providerAccountId))
+      const exactMatch = codexQuotas.find(
+        (quota) => quota.providerAccountId === account.id || quota.accountKey === account.id
       );
+      const defaultMatch = account.isDefault
+        ? codexQuotas.find((quota) => quota.accountKey === 'default' || !quota.providerAccountId)
+        : undefined;
+      const matched = exactMatch ?? defaultMatch;
       return (
         matched ?? {
           provider: 'codex',
@@ -241,10 +264,10 @@
 </script>
 
 <Modal
-  width="980px"
+  width="min(1360px, 94vw)"
   zIndex={700}
   overlayBg="rgba(0, 0, 0, 0.75)"
-  modalStyle="max-height: 88vh; background: var(--bg1, #0f1412); border: 1px solid var(--bd, #27322b); overflow: hidden; box-shadow: 0 16px 48px rgba(0,0,0,0.8); gap: 0; padding: 0; border-radius: 8px;"
+  modalStyle="max-height: 90vh; height: 86vh; background: var(--bg1, #0f1412); border: 1px solid var(--bd, #27322b); overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.85); gap: 0; padding: 0; border-radius: 8px; display: flex; flex-direction: column;"
   on:close={onClose}
 >
   <!-- Header -->
@@ -319,204 +342,224 @@
   </div>
 
   <div class="content-scroll">
-    <!-- Provider Quota Overview -->
+    <!-- Provider Quota Overview (Collapsible to save vertical space) -->
     <div class="section-container">
-      <div class="section-header">
+      <button
+        class="section-header-btn"
+        on:click={() => (quotasExpanded = !quotasExpanded)}
+        aria-expanded={quotasExpanded}
+        type="button"
+      >
         <div class="section-title">
           <Layers size={14} />
           <span>PROVIDER & ACCOUNT QUOTAS</span>
+          <span class="quota-count-badge">{codexQuotaCards.length + 1}</span>
         </div>
-        <div class="section-hint">Shared account quotas across all active subagents</div>
-      </div>
+        <div class="section-header-right">
+          <span class="section-hint">
+            {quotasExpanded
+              ? 'Click to collapse quotas'
+              : 'Click to view active quotas across accounts'}
+          </span>
+          <span class="collapse-icon">
+            {#if quotasExpanded}
+              <ChevronDown size={14} />
+            {:else}
+              <ChevronRight size={14} />
+            {/if}
+          </span>
+        </div>
+      </button>
 
-      <div class="quota-grid">
-        <!-- Each Codex profile has its own quota; never combine shared account limits. -->
-        {#each codexQuotaCards as codexQuota (codexQuota.providerAccountId ?? codexQuota.accountKey)}
-          {@const codexAccount = $providerAccounts[codexQuota.providerAccountId ?? '']}
+      {#if quotasExpanded}
+        <div class="quota-grid">
+          <!-- Each Codex profile has its own quota; never combine shared account limits. -->
+          {#each codexQuotaCards as codexQuota (codexQuota.providerAccountId ?? codexQuota.accountKey)}
+            {@const codexAccount = $providerAccounts[codexQuota.providerAccountId ?? '']}
+            <div class="quota-card">
+              <div class="quota-card-header">
+                <div class="provider-badge codex">
+                  <span class="dot">●</span>
+                  <span
+                    >CODEX · {$providerAccounts[codexQuota.providerAccountId ?? '']?.label ??
+                      codexQuota.accountKey}</span
+                  >
+                </div>
+                <div class="quota-card-actions">
+                  <span class="source-tag">{codexQuota?.source ?? 'local'}</span>
+                  {#if codexAccount && codexAccount.id !== 'codex-system-default'}
+                    <label
+                      class="auto-handoff-toggle"
+                      title="Use this account's quota for new sessions"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={codexAccount.isDefault}
+                        disabled={!['available', 'busy', 'near_limit'].includes(codexAccount.status)}
+                        on:change={() => selectActiveAccount(codexAccount.id)}
+                      />
+                      active
+                    </label>
+                  {/if}
+                </div>
+              </div>
+
+              {#if $providerAccounts[codexQuota.providerAccountId ?? '']?.authType === 'api_key'}
+                <p class="reset-meta">
+                  API billing and rate limits are separate from ChatGPT allowance.
+                </p>
+              {:else}
+                <!-- 5-hour window -->
+                <div class="quota-row">
+                  <div class="quota-meta">
+                    <span class="quota-label">5-Hour Usage</span>
+                    <span
+                      class="quota-pct {codexQuota?.fiveHour
+                        ? getQuotaColorClass(codexQuota.fiveHour.utilization)
+                        : ''}"
+                    >
+                      {codexQuota?.fiveHour
+                        ? formatPercent(codexQuota.fiveHour.utilization)
+                        : 'unavailable'}
+                    </span>
+                  </div>
+                  <div class="progress-track">
+                    <div
+                      class="progress-fill {codexQuota?.fiveHour
+                        ? getQuotaColorClass(codexQuota.fiveHour.utilization)
+                        : ''}"
+                      style="width: {codexQuota?.fiveHour
+                        ? Math.min(100, Math.max(0, codexQuota.fiveHour.utilization * 100))
+                        : 0}%"
+                    ></div>
+                  </div>
+                  <div class="reset-meta">
+                    <Clock size={11} />
+                    <span
+                      >{codexQuota?.fiveHour?.resetsAt
+                        ? `Resets ${formatTimeRemaining(codexQuota.fiveHour.resetsAt)}`
+                        : 'Reset time pending'}</span
+                    >
+                  </div>
+                </div>
+
+                <!-- 7-day window -->
+                <div class="quota-row">
+                  <div class="quota-meta">
+                    <span class="quota-label">7-Day Usage</span>
+                    <span
+                      class="quota-pct {codexQuota?.sevenDay
+                        ? getQuotaColorClass(codexQuota.sevenDay.utilization)
+                        : ''}"
+                    >
+                      {codexQuota?.sevenDay
+                        ? formatPercent(codexQuota.sevenDay.utilization)
+                        : 'unavailable'}
+                    </span>
+                  </div>
+                  <div class="progress-track">
+                    <div
+                      class="progress-fill {codexQuota?.sevenDay
+                        ? getQuotaColorClass(codexQuota.sevenDay.utilization)
+                        : ''}"
+                      style="width: {codexQuota?.sevenDay
+                        ? Math.min(100, Math.max(0, codexQuota.sevenDay.utilization * 100))
+                        : 0}%"
+                    ></div>
+                  </div>
+                  <div class="reset-meta">
+                    <Clock size={11} />
+                    <span
+                      >{codexQuota?.sevenDay?.resetsAt
+                        ? `Resets ${formatTimeRemaining(codexQuota.sevenDay.resetsAt)}`
+                        : 'Reset time pending'}</span
+                    >
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/each}
+
+          <!-- Claude Quota Card -->
           <div class="quota-card">
             <div class="quota-card-header">
-              <div class="provider-badge codex">
+              <div class="provider-badge claude">
                 <span class="dot">●</span>
+                <span>CLAUDE CODE (Anthropic)</span>
+              </div>
+              <span class="source-tag">{claudeQuota?.source ?? 'session'}</span>
+            </div>
+
+            <!-- 5-hour window -->
+            <div class="quota-row">
+              <div class="quota-meta">
+                <span class="quota-label">5-Hour Usage</span>
                 <span
-                  >CODEX · {$providerAccounts[codexQuota.providerAccountId ?? '']?.label ??
-                    codexQuota.accountKey}</span
+                  class="quota-pct {claudeQuota?.fiveHour
+                    ? getQuotaColorClass(claudeQuota.fiveHour.utilization)
+                    : ''}"
+                >
+                  {claudeQuota?.fiveHour
+                    ? formatPercent(claudeQuota.fiveHour.utilization)
+                    : 'Reported by CLI'}
+                </span>
+              </div>
+              <div class="progress-track">
+                <div
+                  class="progress-fill {claudeQuota?.fiveHour
+                    ? getQuotaColorClass(claudeQuota.fiveHour.utilization)
+                    : ''}"
+                  style="width: {claudeQuota?.fiveHour
+                    ? Math.min(100, Math.max(0, claudeQuota.fiveHour.utilization * 100))
+                    : 0}%"
+                ></div>
+              </div>
+              <div class="reset-meta">
+                <Clock size={11} />
+                <span
+                  >{claudeQuota?.fiveHour?.resetsAt
+                    ? `Resets ${formatTimeRemaining(claudeQuota.fiveHour.resetsAt)}`
+                    : 'Monitored per session'}</span
                 >
               </div>
-              <div class="quota-card-actions">
-                <span class="source-tag">{codexQuota?.source ?? 'local'}</span>
-                {#if codexAccount && codexAccount.id !== 'codex-system-default'}
-                  <label
-                    class="auto-handoff-toggle"
-                    title="Use this account for automatic quota handoff"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={automaticHandoffAccounts[codexAccount.id] ?? false}
-                      disabled={!['available', 'busy', 'near_limit'].includes(codexAccount.status)}
-                      on:change={(event) =>
-                        toggleAutomaticHandoff(codexAccount.id, event.currentTarget.checked)}
-                    />
-                    auto
-                  </label>
-                {/if}
+            </div>
+
+            <!-- 7-day window -->
+            <div class="quota-row">
+              <div class="quota-meta">
+                <span class="quota-label">7-Day Usage</span>
+                <span
+                  class="quota-pct {claudeQuota?.sevenDay
+                    ? getQuotaColorClass(claudeQuota.sevenDay.utilization)
+                    : ''}"
+                >
+                  {claudeQuota?.sevenDay
+                    ? formatPercent(claudeQuota.sevenDay.utilization)
+                    : 'Standard tier'}
+                </span>
               </div>
-            </div>
-
-            {#if $providerAccounts[codexQuota.providerAccountId ?? '']?.authType === 'api_key'}
-              <p class="reset-meta">
-                API billing and rate limits are separate from ChatGPT allowance.
-              </p>
-            {:else}
-              <!-- 5-hour window -->
-              <div class="quota-row">
-                <div class="quota-meta">
-                  <span class="quota-label">5-Hour Usage</span>
-                  <span
-                    class="quota-pct {codexQuota?.fiveHour
-                      ? getQuotaColorClass(codexQuota.fiveHour.utilization)
-                      : ''}"
-                  >
-                    {codexQuota?.fiveHour
-                      ? formatPercent(codexQuota.fiveHour.utilization)
-                      : 'unavailable'}
-                  </span>
-                </div>
-                <div class="progress-track">
-                  <div
-                    class="progress-fill {codexQuota?.fiveHour
-                      ? getQuotaColorClass(codexQuota.fiveHour.utilization)
-                      : ''}"
-                    style="width: {codexQuota?.fiveHour
-                      ? Math.min(100, Math.max(0, codexQuota.fiveHour.utilization * 100))
-                      : 0}%"
-                  ></div>
-                </div>
-                <div class="reset-meta">
-                  <Clock size={11} />
-                  <span
-                    >{codexQuota?.fiveHour?.resetsAt
-                      ? `Resets ${formatTimeRemaining(codexQuota.fiveHour.resetsAt)}`
-                      : 'Reset time pending'}</span
-                  >
-                </div>
+              <div class="progress-track">
+                <div
+                  class="progress-fill {claudeQuota?.sevenDay
+                    ? getQuotaColorClass(claudeQuota.sevenDay.utilization)
+                    : ''}"
+                  style="width: {claudeQuota?.sevenDay
+                    ? Math.min(100, Math.max(0, claudeQuota.sevenDay.utilization * 100))
+                    : 0}%"
+                ></div>
               </div>
-
-              <!-- 7-day window -->
-              <div class="quota-row">
-                <div class="quota-meta">
-                  <span class="quota-label">7-Day Usage</span>
-                  <span
-                    class="quota-pct {codexQuota?.sevenDay
-                      ? getQuotaColorClass(codexQuota.sevenDay.utilization)
-                      : ''}"
-                  >
-                    {codexQuota?.sevenDay
-                      ? formatPercent(codexQuota.sevenDay.utilization)
-                      : 'unavailable'}
-                  </span>
-                </div>
-                <div class="progress-track">
-                  <div
-                    class="progress-fill {codexQuota?.sevenDay
-                      ? getQuotaColorClass(codexQuota.sevenDay.utilization)
-                      : ''}"
-                    style="width: {codexQuota?.sevenDay
-                      ? Math.min(100, Math.max(0, codexQuota.sevenDay.utilization * 100))
-                      : 0}%"
-                  ></div>
-                </div>
-                <div class="reset-meta">
-                  <Clock size={11} />
-                  <span
-                    >{codexQuota?.sevenDay?.resetsAt
-                      ? `Resets ${formatTimeRemaining(codexQuota.sevenDay.resetsAt)}`
-                      : 'Reset time pending'}</span
-                  >
-                </div>
+              <div class="reset-meta">
+                <Clock size={11} />
+                <span
+                  >{claudeQuota?.sevenDay?.resetsAt
+                    ? `Resets ${formatTimeRemaining(claudeQuota.sevenDay.resetsAt)}`
+                    : 'Monitored per session'}</span
+                >
               </div>
-            {/if}
-          </div>
-        {/each}
-
-        <!-- Claude Quota Card -->
-        <div class="quota-card">
-          <div class="quota-card-header">
-            <div class="provider-badge claude">
-              <span class="dot">●</span>
-              <span>CLAUDE CODE (Anthropic)</span>
-            </div>
-            <span class="source-tag">{claudeQuota?.source ?? 'session'}</span>
-          </div>
-
-          <!-- 5-hour window -->
-          <div class="quota-row">
-            <div class="quota-meta">
-              <span class="quota-label">5-Hour Usage</span>
-              <span
-                class="quota-pct {claudeQuota?.fiveHour
-                  ? getQuotaColorClass(claudeQuota.fiveHour.utilization)
-                  : ''}"
-              >
-                {claudeQuota?.fiveHour
-                  ? formatPercent(claudeQuota.fiveHour.utilization)
-                  : 'Reported by CLI'}
-              </span>
-            </div>
-            <div class="progress-track">
-              <div
-                class="progress-fill {claudeQuota?.fiveHour
-                  ? getQuotaColorClass(claudeQuota.fiveHour.utilization)
-                  : ''}"
-                style="width: {claudeQuota?.fiveHour
-                  ? Math.min(100, Math.max(0, claudeQuota.fiveHour.utilization * 100))
-                  : 0}%"
-              ></div>
-            </div>
-            <div class="reset-meta">
-              <Clock size={11} />
-              <span
-                >{claudeQuota?.fiveHour?.resetsAt
-                  ? `Resets ${formatTimeRemaining(claudeQuota.fiveHour.resetsAt)}`
-                  : 'Monitored per session'}</span
-              >
-            </div>
-          </div>
-
-          <!-- 7-day window -->
-          <div class="quota-row">
-            <div class="quota-meta">
-              <span class="quota-label">7-Day Usage</span>
-              <span
-                class="quota-pct {claudeQuota?.sevenDay
-                  ? getQuotaColorClass(claudeQuota.sevenDay.utilization)
-                  : ''}"
-              >
-                {claudeQuota?.sevenDay
-                  ? formatPercent(claudeQuota.sevenDay.utilization)
-                  : 'Standard tier'}
-              </span>
-            </div>
-            <div class="progress-track">
-              <div
-                class="progress-fill {claudeQuota?.sevenDay
-                  ? getQuotaColorClass(claudeQuota.sevenDay.utilization)
-                  : ''}"
-                style="width: {claudeQuota?.sevenDay
-                  ? Math.min(100, Math.max(0, claudeQuota.sevenDay.utilization * 100))
-                  : 0}%"
-              ></div>
-            </div>
-            <div class="reset-meta">
-              <Clock size={11} />
-              <span
-                >{claudeQuota?.sevenDay?.resetsAt
-                  ? `Resets ${formatTimeRemaining(claudeQuota.sevenDay.resetsAt)}`
-                  : 'Monitored per session'}</span
-              >
             </div>
           </div>
         </div>
-      </div>
+      {/if}
     </div>
 
     <!-- Navigation Tabs -->
@@ -567,35 +610,35 @@
         <table class="usage-table">
           <thead>
             <tr>
-              <th on:click={() => setSort('name')} class="sortable">
+              <th on:click={() => setSort('name')} class="sortable col-name">
                 <div class="th-content">
                   <span>Project / Agent</span>
                   <ArrowUpDown size={11} />
                 </div>
               </th>
-              <th>Provider</th>
-              <th>Account</th>
-              <th>Model</th>
-              <th on:click={() => setSort('context')} class="sortable">
+              <th class="col-provider">Provider</th>
+              <th class="col-account">Account</th>
+              <th class="col-model">Model</th>
+              <th on:click={() => setSort('context')} class="sortable col-context">
                 <div class="th-content">
                   <span>Context Window</span>
                   <ArrowUpDown size={11} />
                 </div>
               </th>
-              <th on:click={() => setSort('tokens')} class="sortable text-right">
+              <th on:click={() => setSort('tokens')} class="sortable col-tokens text-right">
                 <div class="th-content right">
                   <span>Tokens</span>
                   <ArrowUpDown size={11} />
                 </div>
               </th>
-              <th on:click={() => setSort('cost')} class="sortable text-right">
+              <th on:click={() => setSort('cost')} class="sortable col-cost text-right">
                 <div class="th-content right">
                   <span>Cost (Est)</span>
                   <ArrowUpDown size={11} />
                 </div>
               </th>
-              <th class="text-center">Status</th>
-              <th></th>
+              <th class="col-status text-center">Status</th>
+              <th class="col-action text-center"></th>
             </tr>
           </thead>
           <tbody>
@@ -617,9 +660,12 @@
                   <td class="col-provider">
                     <span class="provider-pill {agent.provider}">{agent.provider}</span>
                   </td>
-                  <td class="col-provider"
-                    >{$providerAccounts[agent.providerAccountId ?? '']?.label ?? 'Unassigned'}</td
-                  >
+                  <td class="col-account">
+                    <span class="account-text"
+                      >{$providerAccounts[agent.providerAccountId ?? '']?.label ??
+                        'Unassigned'}</span
+                    >
+                  </td>
                   <td class="col-model">
                     <span class="model-text">{modelShortName(agent.model)}</span>
                   </td>
@@ -642,10 +688,12 @@
                     </div>
                   </td>
                   <td class="col-tokens text-right">
-                    <div class="tok-main">{formatTokens(agent.tokens)}</div>
-                    {#if agent.cachedTokens > 0}
-                      <div class="tok-sub">cache {formatTokens(agent.cachedTokens)}</div>
-                    {/if}
+                    <div class="tok-wrapper">
+                      <span class="tok-main">{formatTokens(agent.tokens)}</span>
+                      {#if agent.cachedTokens > 0}
+                        <span class="tok-sub">cache {formatTokens(agent.cachedTokens)}</span>
+                      {/if}
+                    </div>
                   </td>
                   <td class="col-cost text-right">
                     <span class="cost-text">{formatCost(agent.cost)}</span>
@@ -656,7 +704,7 @@
                       <span class="status-text">{agent.status.toUpperCase()}</span>
                     </span>
                   </td>
-                  <td class="col-action text-right">
+                  <td class="col-action text-center">
                     <button class="jump-btn" title="Open Agent" aria-label="Open Agent">
                       <ExternalLink size={13} />
                     </button>
@@ -727,7 +775,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--sp-6, 14px) var(--sp-8, 18px);
+    padding: 16px 24px;
     border-bottom: 1px solid var(--bd, #27322b);
     background: var(--bg2, #161c18);
   }
@@ -737,8 +785,8 @@
     gap: var(--sp-4, 10px);
   }
   .header-icon {
-    width: 32px;
-    height: 32px;
+    width: 34px;
+    height: 34px;
     border-radius: 6px;
     background: rgba(0, 212, 126, 0.12);
     color: var(--ac, #00d47e);
@@ -822,16 +870,16 @@
   .kpi-banner {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    padding: 14px 18px;
+    gap: 14px;
+    padding: 14px 24px;
     background: var(--bg1, #0f1412);
     border-bottom: 1px solid var(--bd, #27322b);
   }
   .kpi-card {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 12px;
+    padding: 12px 16px;
     background: var(--bg2, #161c18);
     border: 1px solid var(--bd, #27322b);
     border-radius: 6px;
@@ -842,13 +890,13 @@
     align-items: center;
   }
   .kpi-label {
-    font-size: 9px;
+    font-size: 9.5px;
     color: var(--t3, #5a6660);
     letter-spacing: 0.08em;
     font-family: var(--mono);
   }
   .kpi-value {
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 600;
     color: var(--t0, #ffffff);
     font-family: var(--mono);
@@ -860,12 +908,13 @@
 
   /* Scroll Area */
   .content-scroll {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    max-height: calc(88vh - 180px);
-    padding: 18px;
+    padding: 20px 24px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 20px;
   }
 
   /* Section Header */
@@ -874,23 +923,61 @@
     flex-direction: column;
     gap: 10px;
   }
-  .section-header {
+  .section-header-btn {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    width: 100%;
+    background: var(--bg2, #161c18);
+    border: 1px solid var(--bd, #27322b);
+    border-radius: 6px;
+    padding: 10px 14px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+  .section-header-btn:hover {
+    background: var(--bg3, #1d2520);
+    border-color: rgba(0, 212, 126, 0.35);
   }
   .section-title {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     font-size: 11px;
     font-weight: 600;
     color: var(--t1, #c5d1cb);
     letter-spacing: 0.06em;
   }
+  .quota-count-badge {
+    font-size: 10px;
+    font-family: var(--mono);
+    background: var(--bg3, #1d2520);
+    border: 1px solid var(--bd, #27322b);
+    color: var(--ac, #00d47e);
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .section-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .section-hint {
     font-size: 10px;
     color: var(--t3, #5a6660);
+  }
+  .collapse-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--t2, #8b9991);
+    transition: color 0.15s ease;
+  }
+  .section-header-btn:hover .collapse-icon {
+    color: var(--t0, #ffffff);
   }
 
   /* Quota Cards */
@@ -999,21 +1086,33 @@
   .quota-normal,
   .ctx-normal {
     color: #00d47e;
-    background-color: #00d47e;
   }
   .quota-warning,
   .ctx-warning {
     color: #e5a544;
-    background-color: #e5a544;
   }
   .quota-high,
   .ctx-high {
     color: #f07b3f;
-    background-color: #f07b3f;
   }
   .quota-critical,
   .ctx-critical {
     color: #f04848;
+  }
+  .progress-fill.quota-normal,
+  .ctx-fill.ctx-normal {
+    background-color: #00d47e;
+  }
+  .progress-fill.quota-warning,
+  .ctx-fill.ctx-warning {
+    background-color: #e5a544;
+  }
+  .progress-fill.quota-high,
+  .ctx-fill.ctx-high {
+    background-color: #f07b3f;
+  }
+  .progress-fill.quota-critical,
+  .ctx-fill.ctx-critical {
     background-color: #f04848;
   }
 
@@ -1052,12 +1151,12 @@
   .search-box {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     background: var(--bg2, #161c18);
     border: 1px solid var(--bd, #27322b);
-    border-radius: 4px;
-    padding: 4px 8px;
-    width: 240px;
+    border-radius: 5px;
+    padding: 6px 10px;
+    width: 280px;
     color: var(--t2, #8b9991);
   }
   .search-box input {
@@ -1065,7 +1164,7 @@
     border: none;
     outline: none;
     color: var(--t0, #ffffff);
-    font-size: 11px;
+    font-size: 11.5px;
     width: 100%;
   }
   .clear-search {
@@ -1082,21 +1181,27 @@
     background: var(--bg2, #161c18);
     border: 1px solid var(--bd, #27322b);
     border-radius: 6px;
-    overflow: hidden;
+    overflow-x: auto;
   }
   .usage-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 11px;
+    font-size: 12px;
+    table-layout: fixed;
   }
   .usage-table th {
     background: var(--bg3, #1d2520);
     color: var(--t2, #8b9991);
     font-weight: 500;
     text-align: left;
-    padding: 8px 12px;
+    padding: 12px 14px;
     border-bottom: 1px solid var(--bd, #27322b);
     user-select: none;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11.5px;
   }
   .usage-table th.sortable {
     cursor: pointer;
@@ -1105,17 +1210,53 @@
     color: var(--t0, #ffffff);
   }
   .th-content {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 4px;
+    vertical-align: middle;
   }
   .th-content.right {
     justify-content: flex-end;
+    width: 100%;
   }
   .usage-table td {
-    padding: 10px 12px;
+    padding: 14px 14px;
     border-bottom: 1px solid rgba(39, 50, 43, 0.4);
     color: var(--t1, #c5d1cb);
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+  }
+  .col-name {
+    width: auto;
+    min-width: 240px;
+  }
+  .col-provider {
+    width: 90px;
+  }
+  .col-account {
+    width: 110px;
+  }
+  .col-model {
+    width: 125px;
+  }
+  .col-context {
+    width: 140px;
+  }
+  .col-tokens {
+    width: 95px;
+  }
+  .col-cost {
+    width: 90px;
+  }
+  .col-status {
+    width: 105px;
+  }
+  .col-action {
+    width: 40px;
+    text-align: center;
   }
   .agent-row {
     cursor: pointer;
@@ -1125,29 +1266,50 @@
     background: rgba(0, 212, 126, 0.04);
   }
   .project-agent {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
+    vertical-align: middle;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .p-name {
     color: var(--t2, #8b9991);
-    font-size: 11px;
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .sep {
     color: var(--t3, #5a6660);
+    flex-shrink: 0;
   }
   .a-name {
     color: var(--t0, #ffffff);
     font-weight: 500;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .account-text {
+    color: var(--t2, #8b9991);
+    font-size: 11.5px;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .provider-pill {
-    font-size: 9px;
-    padding: 2px 6px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 9.5px;
+    padding: 2px 7px;
     border-radius: 4px;
     font-family: var(--mono);
     text-transform: uppercase;
     background: var(--bg3, #1d2520);
     border: 1px solid var(--bd, #27322b);
+    line-height: 1.3;
+    vertical-align: middle;
   }
   .provider-pill.codex {
     border-color: rgba(0, 212, 126, 0.3);
@@ -1160,20 +1322,25 @@
   }
   .model-text {
     font-family: var(--mono);
-    font-size: 11px;
-    color: var(--t1, #c5d1cb);
+    font-size: 11.5px;
+    color: var(--t2, #8b9991);
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .ctx-cell {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 8px;
+    vertical-align: middle;
   }
   .ctx-track {
-    width: 60px;
+    width: 64px;
     height: 5px;
     background: var(--bg3, #1d2520);
     border-radius: 999px;
     overflow: hidden;
+    flex-shrink: 0;
   }
   .ctx-fill {
     height: 100%;
@@ -1181,36 +1348,51 @@
   }
   .ctx-val {
     font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 600;
+    font-size: 10.5px;
+    font-weight: 500;
+    min-width: 24px;
+  }
+  .tok-wrapper {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    vertical-align: middle;
+    line-height: 1.25;
   }
   .tok-main {
     font-family: var(--mono);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--t0, #ffffff);
+    font-size: 12px;
   }
   .tok-sub {
-    font-size: 9px;
+    font-size: 9.5px;
     color: var(--t3, #5a6660);
     font-family: var(--mono);
   }
   .cost-text {
     font-family: var(--mono);
     color: var(--t1, #c5d1cb);
+    vertical-align: middle;
+    font-size: 12px;
   }
   .status-badge {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 5px;
-    font-size: 9px;
+    font-size: 10px;
     font-family: var(--mono);
     font-weight: 600;
     color: var(--dot-c);
+    vertical-align: middle;
   }
   .status-dot {
-    width: 6px;
-    height: 6px;
+    width: 6.5px;
+    height: 6.5px;
     border-radius: 50%;
+    flex-shrink: 0;
   }
   .jump-btn {
     background: none;
@@ -1219,16 +1401,24 @@
     cursor: pointer;
     padding: 4px;
     border-radius: 4px;
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
+    vertical-align: middle;
   }
   .jump-btn:hover {
     color: var(--ac, #00d47e);
     background: var(--bg3, #1d2520);
   }
+  .text-right {
+    text-align: right;
+  }
+  .text-center {
+    text-align: center;
+  }
   .empty-state {
     text-align: center;
-    padding: 24px;
+    padding: 36px;
     color: var(--t3, #5a6660);
   }
 

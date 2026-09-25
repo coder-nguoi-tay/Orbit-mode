@@ -306,12 +306,15 @@
   {/if}
 
   {#each accounts as account (account.id)}
-    {@const quota = $providerQuotas.find(
-      (sample) =>
-        sample.providerAccountId === account.id ||
-        sample.accountKey === account.id ||
-        (account.isDefault && (sample.accountKey === 'default' || !sample.providerAccountId))
+    {@const exactQuota = $providerQuotas.find(
+      (sample) => sample.providerAccountId === account.id || sample.accountKey === account.id
     )}
+    {@const defaultQuota = account.isDefault
+      ? $providerQuotas.find(
+          (sample) => sample.accountKey === 'default' || !sample.providerAccountId
+        )
+      : undefined}
+    {@const quota = exactQuota ?? defaultQuota}
     <article class="account-card">
       <div class="account-heading">
         <strong>{account.label}</strong>

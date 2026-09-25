@@ -112,6 +112,94 @@ fn count_changed_lines(old_text: &str, new_text: &str) -> LinesChanged {
     }
 }
 
+/// Normalize a Claude `rate_limit_event` payload into all available quota windows.
+///
+/// Claude reports the active window at the top level and, for subscription accounts,
+/// reports the complete five-hour and seven-day values under `unifiedWindows`.
+///
+/// @param info The structured `rate_limit_info` object from a Claude JSONL event.
+/// @return Normalized five-hour and seven-day rate-limit samples.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+fn parse_claude_rate_limit_entries(info: Option<&Value>) -> Vec<RateLimitInfo> {
+    let Some(info) = info else {
+        return Vec::new();
+    };
+
+    let status = info
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let is_using_overage = info
+        .get("isUsingOverage")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let top_level_threshold = info
+        .get("surpassedThreshold")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
+    let mut entries = Vec::new();
+    if let Some(windows) = info.get("unifiedWindows").and_then(Value::as_object) {
+        for (window_name, window) in windows {
+            let Some(rate_limit_type) = (match window_name.as_str() {
+                "five_hour" | "fiveHour" => Some("five_hour"),
+                "seven_day" | "sevenDay" => Some("seven_day"),
+                _ => None,
+            }) else {
+                continue;
+            };
+
+            let utilization = window
+                .get("utilization")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let resets_at = window
+                .get("resetsAt")
+                .or_else(|| window.get("resets_at"))
+                .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)));
+            let surpassed_threshold = window
+                .get("surpassedThreshold")
+                .and_then(Value::as_f64)
+                .unwrap_or(top_level_threshold);
+
+            entries.push(RateLimitInfo {
+                status: status.clone(),
+                rate_limit_type: rate_limit_type.to_string(),
+                utilization,
+                resets_at,
+                is_using_overage,
+                surpassed_threshold,
+            });
+        }
+    }
+
+    if entries.is_empty() {
+        entries.push(RateLimitInfo {
+            status,
+            rate_limit_type: info
+                .get("rateLimitType")
+                .or_else(|| info.get("rate_limit_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            utilization: info
+                .get("utilization")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            resets_at: info
+                .get("resetsAt")
+                .or_else(|| info.get("resets_at"))
+                .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64))),
+            is_using_overage,
+            surpassed_threshold: top_level_threshold,
+        });
+    }
+
+    entries
+}
+
 /// Process a single raw JSONL line from PTY stdout and update state.
 /// This is the real-time counterpart to parse_journal (which reads files).
 pub fn process_line(state: &mut JournalState, line: &str) {
@@ -353,56 +441,31 @@ pub fn process_line(state: &mut JournalState, line: &str) {
 
         "rate_limit_event" => {
             // rate_limit_info lives at the top level of the JSON line, not inside message
-            let info = if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                val.get("rate_limit_info").cloned()
-            } else {
-                raw.message
-                    .as_ref()
-                    .and_then(|m| m.get("rate_limit_info"))
-                    .cloned()
-            };
-            let info = info.as_ref();
+            let info = serde_json::from_str::<Value>(trimmed)
+                .ok()
+                .and_then(|val| val.get("rate_limit_info").cloned())
+                .or_else(|| {
+                    raw.message
+                        .as_ref()
+                        .and_then(|message| message.get("rate_limit_info"))
+                        .cloned()
+                });
             let status = info
-                .and_then(|i| i.get("status"))
-                .and_then(|v| v.as_str())
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            let limit_type = info
-                .and_then(|i| i.get("rateLimitType"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let utilization = info
-                .and_then(|i| i.get("utilization"))
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let resets_at = info
-                .and_then(|i| i.get("resetsAt"))
-                .and_then(|v| v.as_u64())
-                .map(|v| v as i64);
-            let is_using_overage = info
-                .and_then(|i| i.get("isUsingOverage"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let surpassed_threshold = info
-                .and_then(|i| i.get("surpassedThreshold"))
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
 
-            let rl_entry = crate::models::RateLimitInfo {
-                status: status.to_string(),
-                rate_limit_type: limit_type.to_string(),
-                utilization,
-                resets_at,
-                is_using_overage,
-                surpassed_threshold,
-            };
-            if let Some(existing) = state
-                .rate_limit
-                .iter_mut()
-                .find(|r| r.rate_limit_type == limit_type)
-            {
-                *existing = rl_entry;
-            } else {
-                state.rate_limit.push(rl_entry);
+            for rate_limit in parse_claude_rate_limit_entries(info.as_ref()) {
+                if let Some(existing) = state
+                    .rate_limit
+                    .iter_mut()
+                    .find(|entry| entry.rate_limit_type == rate_limit.rate_limit_type)
+                {
+                    *existing = rate_limit;
+                } else {
+                    state.rate_limit.push(rate_limit);
+                }
             }
             if status == "exceeded" || status == "blocked" {
                 state.attention = crate::models::AttentionState {
@@ -1652,5 +1715,98 @@ mod helper_tests {
         let result = detect_pending_approval(&entries);
         t.phase("Assert");
         t.none("no pending approval when tool_result exists", &result);
+    }
+
+    /// Keep both Claude allowance windows when the CLI reports unified subscription limits.
+    ///
+    /// @return No value; assertions verify both normalized Claude windows are retained.
+    /// @throws Panic If the Claude payload no longer produces both windows.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_parse_claude_unified_quota_windows() {
+        let mut state = JournalState::default();
+        let line = serde_json::json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "allowed",
+                "rateLimitType": "five_hour",
+                "resetsAt": 1790359800i64,
+                "isUsingOverage": false,
+                "unifiedWindows": {
+                    "five_hour": {
+                        "utilization": 0.27,
+                        "resetsAt": 1790359800i64
+                    },
+                    "seven_day": {
+                        "utilization": 0.35,
+                        "resetsAt": 1790845200i64
+                    }
+                }
+            }
+        });
+
+        process_line(&mut state, &line.to_string());
+
+        assert_eq!(state.rate_limit.len(), 2);
+        let five_hour = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "five_hour")
+            .expect("missing Claude five-hour quota");
+        let seven_day = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "seven_day")
+            .expect("missing Claude seven-day quota");
+        assert_eq!(five_hour.utilization, 0.27);
+        assert_eq!(seven_day.utilization, 0.35);
+        assert_eq!(seven_day.resets_at, Some(1790845200));
+    }
+
+    /// Keep both Codex allowance windows when the CLI reports five-hour and seven-day limits.
+    ///
+    /// @return No value; assertions verify both normalized quota windows are retained.
+    /// @throws Panic If the Codex payload no longer produces both windows.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_parse_codex_quota_windows_from_token_count_event() {
+        let mut state = JournalState::default();
+        let line = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": { "total_token_usage": {} },
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 15.0,
+                        "window_minutes": 300,
+                        "resets_at": 1790372282
+                    },
+                    "secondary": {
+                        "used_percent": 2.0,
+                        "window_minutes": 10080,
+                        "resets_at": 1790959082
+                    }
+                }
+            }
+        });
+
+        process_line_codex(&mut state, &line.to_string());
+
+        assert_eq!(state.rate_limit.len(), 2);
+        let five_hour = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "five_hour")
+            .expect("missing five-hour quota");
+        let seven_day = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "seven_day")
+            .expect("missing seven-day quota");
+        assert_eq!(five_hour.utilization, 0.15);
+        assert_eq!(seven_day.utilization, 0.02);
     }
 }

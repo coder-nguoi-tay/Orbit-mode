@@ -6,6 +6,7 @@ pub mod journal;
 pub mod mcp_proxy;
 pub mod mcp_transport;
 pub mod models;
+pub mod pipeline;
 pub mod providers;
 pub mod services;
 pub mod tray;
@@ -13,6 +14,7 @@ pub mod tray;
 #[cfg(test)]
 pub mod test_utils;
 
+use ipc::pipeline::PipelineState;
 use ipc::session::{ProviderRegistryState, SessionState};
 use ipc::terminal::PtyManagerState;
 use providers::ProviderRegistry;
@@ -60,13 +62,20 @@ pub fn run() {
             let db_path = data_dir.join("agent-dashboard.db");
             let db = Arc::new(DatabaseService::open(&db_path).expect("Could not open database"));
 
-            let session_manager = Arc::new(RwLock::new(SessionManager::new(db)));
+            let session_manager = Arc::new(RwLock::new(SessionManager::new(Arc::clone(&db))));
             app.manage(SessionState(Arc::clone(&session_manager)));
 
             // Provider registry — maps provider IDs to trait implementations.
             // Gemini/Copilot (ACP) live in providers/acp.rs; register there when re-enabled.
             let registry = Arc::new(ProviderRegistry::with_shipped_providers());
             app.manage(ProviderRegistryState(Arc::clone(&registry)));
+
+            // Pipeline orchestrator — shares DB, SessionManager, and ProviderRegistry
+            app.manage(PipelineState::new(
+                Arc::clone(&db),
+                Arc::clone(&session_manager),
+                Arc::clone(&registry),
+            ));
 
             // Start embedded MCP server — shares SessionManager and ProviderRegistry
             let mcp_handler = Arc::new(ipc::mcp::McpHandler::new(
@@ -191,6 +200,12 @@ pub fn run() {
                     "session:subagent-created",
                     "session:deleted",
                     "session:raw-output",
+                    "pipeline:created",
+                    "pipeline:state",
+                    "pipeline:step-started",
+                    "pipeline:step-completed",
+                    "pipeline:attention",
+                    "pipeline:completed",
                 ];
                 for event_name in events {
                     let tx = stream_tx.clone();
@@ -279,6 +294,7 @@ pub fn run() {
             commands::stats::get_rate_limits,
             commands::stats::get_usage_overview,
             commands::stats::get_provider_quotas,
+            commands::stats::refresh_codex_quotas,
             commands::stats::get_session_usages,
             commands::accounts::get_provider_accounts,
             commands::accounts::create_codex_account,
@@ -317,6 +333,11 @@ pub fn run() {
             ipc::http_api::set_http_settings,
             ipc::http_api::get_lan_ip,
             commands::window::set_window_opacity,
+            ipc::pipeline::create_pipeline,
+            ipc::pipeline::list_pipelines,
+            ipc::pipeline::get_pipeline,
+            ipc::pipeline::cancel_pipeline,
+            ipc::pipeline::set_pipeline_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -10,3 +10,4 @@ export * from './window';
 export * from './diff';
 export * from './usage';
 export * from './accounts';
+export * from './pipelines';

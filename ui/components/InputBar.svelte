@@ -596,6 +596,7 @@ If the user provides neither role nor name nor mission, ask one concise question
   />
 
   <div class="input-row">
+    <span class="cmd-prompt" aria-hidden="true">&gt;</span>
     <textarea
       bind:this={textarea}
       bind:value={text}
@@ -712,21 +713,33 @@ If the user provides neither role nor name nor mission, ask one concise question
   }
 
   .quiet-composer {
-    width: calc(100% - 76px);
-    margin: 14px 38px 24px;
-    border: 1px solid var(--bd2);
-    background: color-mix(in srgb, var(--t0), transparent 94%);
-    border-radius: var(--radius-md);
-    padding: 12px;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+    width: calc(100% - 48px);
+    margin: 8px 24px 16px;
+    border: 1px solid var(--bd1);
+    background: var(--bg1);
+    border-radius: 4px;
+    padding: 8px 12px;
+    box-shadow: none;
   }
   .quiet-composer .input-row {
+    display: flex;
     align-items: flex-start;
-    padding: 4px 6px 14px;
+    gap: 8px;
+    padding: 2px 0 6px;
+  }
+  .cmd-prompt {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t1);
+    line-height: 1.5;
+    user-select: none;
+    flex-shrink: 0;
   }
   .quiet-composer textarea {
+    font-family: var(--mono);
     font-size: 13px;
-    line-height: 1.55;
+    line-height: 1.5;
     color: var(--t0);
     padding: 0;
   }
@@ -734,28 +747,30 @@ If the user provides neither role nor name nor mission, ask one concise question
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--bd1), transparent 50%);
+    padding-top: 6px;
   }
   .btns {
     display: flex;
-    gap: 6px;
+    gap: 5px;
     align-items: center;
     min-width: 0;
     flex-shrink: 0;
   }
   .composer-chip {
     border: 1px solid var(--bd1);
-    color: var(--t1);
-    background: color-mix(in srgb, var(--t0), transparent 97%);
-    border-radius: var(--radius-sm);
-    padding: 6px 9px;
+    color: var(--t2);
+    background: transparent;
+    border-radius: 3px;
+    padding: 3px 7px;
     font-family: var(--mono);
     font-size: 10px;
     cursor: pointer;
     flex-shrink: 0;
   }
   .composer-chip:hover {
-    background: color-mix(in srgb, var(--t0), transparent 92%);
+    background: rgba(255, 255, 255, 0.05);
     color: var(--t0);
   }
   .composer-chip.active {
@@ -768,18 +783,18 @@ If the user provides neither role nor name nor mission, ask one concise question
     opacity: 0.45;
   }
   .quiet-composer.compact {
-    width: calc(100% - 76px);
-    margin: 10px 38px 16px;
-    min-height: 58px;
-    border-radius: var(--radius-md);
-    padding: 10px;
+    width: calc(100% - 48px);
+    margin: 6px 24px 12px;
+    min-height: 48px;
+    border-radius: 4px;
+    padding: 6px 10px;
   }
   .quiet-composer.compact textarea {
     font-size: 11px;
   }
   .quiet-composer.compact .composer-chip {
-    padding: 5px 8px;
-    font-size: 10px;
+    padding: 2px 6px;
+    font-size: 9px;
   }
 
   @media (max-width: 768px) {

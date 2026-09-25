@@ -274,7 +274,348 @@ impl DatabaseService {
                      'chat_gpt_authenticated', 'unknown', 'local', 1)",
             [],
         )?;
+
+        // Pipeline tables
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id       INTEGER REFERENCES projects(id),
+                name             TEXT NOT NULL,
+                user_request     TEXT NOT NULL,
+                worktree_path    TEXT,
+                status           TEXT NOT NULL DEFAULT 'created',
+                config_json      TEXT NOT NULL DEFAULT '{}',
+                baseline_git_head TEXT,
+                review_loops     INTEGER NOT NULL DEFAULT 0,
+                test_loops       INTEGER NOT NULL DEFAULT 0,
+                plan_revisions   INTEGER NOT NULL DEFAULT 0,
+                total_agent_runs INTEGER NOT NULL DEFAULT 0,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at     TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_steps (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id  INTEGER NOT NULL REFERENCES pipelines(id),
+                role         TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                provider_id  TEXT NOT NULL,
+                model        TEXT,
+                attempt      INTEGER NOT NULL DEFAULT 1,
+                started_at   TEXT,
+                completed_at TEXT,
+                error        TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pipeline_steps_pipeline_id
+                ON pipeline_steps(pipeline_id);
+
+            CREATE TABLE IF NOT EXISTS pipeline_step_sessions (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_step_id INTEGER NOT NULL REFERENCES pipeline_steps(id),
+                session_id       INTEGER NOT NULL REFERENCES sessions(id),
+                attempt          INTEGER NOT NULL DEFAULT 1,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_artifacts (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id),
+                step_id       INTEGER REFERENCES pipeline_steps(id),
+                artifact_type TEXT NOT NULL,
+                version       INTEGER NOT NULL DEFAULT 1,
+                content_json  TEXT NOT NULL,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id  INTEGER NOT NULL REFERENCES pipelines(id),
+                step_id      INTEGER REFERENCES pipeline_steps(id),
+                event_type   TEXT NOT NULL,
+                payload_json TEXT,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pipeline_events_pipeline_id
+                ON pipeline_events(pipeline_id);
+            ",
+        )?;
+
         Ok(())
+    }
+
+    // ── Pipeline CRUD ──────────────────────────────────────────────────────────
+
+    pub fn create_pipeline(
+        &self,
+        name: &str,
+        user_request: &str,
+        worktree_path: Option<&str>,
+        config: &crate::pipeline::models::PipelineConfig,
+    ) -> SqlResult<crate::pipeline::models::PipelineId> {
+        let config_json = serde_json::to_string(config).unwrap_or_default();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO pipelines (name, user_request, worktree_path, status, config_json)
+             VALUES (?1, ?2, ?3, 'created', ?4)",
+            params![name, user_request, worktree_path, config_json],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_pipeline(
+        &self,
+        id: crate::pipeline::models::PipelineId,
+    ) -> SqlResult<Option<crate::pipeline::models::Pipeline>> {
+        use crate::pipeline::models::{Pipeline, PipelineConfig, PipelineStatus};
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let row = conn
+            .query_row(
+                "SELECT id, project_id, name, user_request, worktree_path, status, config_json,
+                        baseline_git_head, review_loops, test_loops, plan_revisions,
+                        total_agent_runs, created_at, updated_at, completed_at
+                 FROM pipelines WHERE id = ?1",
+                params![id],
+                |row| {
+                    let status_str: String = row.get(5)?;
+                    let config_json: String = row.get(6)?;
+                    let config: PipelineConfig = serde_json::from_str(&config_json)
+                        .unwrap_or_else(|_| PipelineConfig::default_preset("claude-code", "auto"));
+                    Ok(Pipeline {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        name: row.get(2)?,
+                        user_request: row.get(3)?,
+                        worktree_path: row.get(4)?,
+                        status: status_str.parse().unwrap_or(PipelineStatus::Created),
+                        config,
+                        baseline_git_head: row.get(7)?,
+                        review_loops: row.get::<_, i64>(8)? as u32,
+                        test_loops: row.get::<_, i64>(9)? as u32,
+                        plan_revisions: row.get::<_, i64>(10)? as u32,
+                        total_agent_runs: row.get::<_, i64>(11)? as u32,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        completed_at: row.get(14)?,
+                        steps: vec![],
+                    })
+                },
+            )
+            .optional()?;
+        if let Some(mut p) = row {
+            p.steps = self.get_pipeline_steps_conn(&conn, id)?;
+            Ok(Some(p))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_pipelines(&self) -> SqlResult<Vec<crate::pipeline::models::Pipeline>> {
+        use crate::pipeline::models::{Pipeline, PipelineConfig, PipelineStatus};
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, name, user_request, worktree_path, status, config_json,
+                    baseline_git_head, review_loops, test_loops, plan_revisions,
+                    total_agent_runs, created_at, updated_at, completed_at
+             FROM pipelines ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                let status_str: String = row.get(5)?;
+                let config_json: String = row.get(6)?;
+                let config: PipelineConfig = serde_json::from_str(&config_json)
+                    .unwrap_or_else(|_| PipelineConfig::default_preset("claude-code", "auto"));
+                Ok(Pipeline {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    name: row.get(2)?,
+                    user_request: row.get(3)?,
+                    worktree_path: row.get(4)?,
+                    status: status_str.parse().unwrap_or(PipelineStatus::Created),
+                    config,
+                    baseline_git_head: row.get(7)?,
+                    review_loops: row.get::<_, i64>(8)? as u32,
+                    test_loops: row.get::<_, i64>(9)? as u32,
+                    plan_revisions: row.get::<_, i64>(10)? as u32,
+                    total_agent_runs: row.get::<_, i64>(11)? as u32,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                    completed_at: row.get(14)?,
+                    steps: vec![],
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|mut p| {
+                p.steps = self.get_pipeline_steps_conn(&conn, p.id)?;
+                Ok(p)
+            })
+            .collect()
+    }
+
+    pub fn update_pipeline_status(
+        &self,
+        id: crate::pipeline::models::PipelineId,
+        status: &crate::pipeline::models::PipelineStatus,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipelines SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![status.to_string(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_pipeline_baseline(
+        &self,
+        id: crate::pipeline::models::PipelineId,
+        git_head: &str,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipelines SET baseline_git_head = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![git_head, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_pipeline_step(
+        &self,
+        pipeline_id: crate::pipeline::models::PipelineId,
+        role: &crate::pipeline::models::PipelineAgentRole,
+        provider_id: &str,
+        model: Option<&str>,
+    ) -> SqlResult<crate::pipeline::models::PipelineStepId> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO pipeline_steps (pipeline_id, role, status, provider_id, model, attempt)
+             VALUES (?1, ?2, 'pending', ?3, ?4, 1)",
+            params![pipeline_id, role.to_string(), provider_id, model],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn update_pipeline_step_status(
+        &self,
+        step_id: crate::pipeline::models::PipelineStepId,
+        status: &crate::pipeline::models::PipelineStepStatus,
+        error: Option<&str>,
+    ) -> SqlResult<()> {
+        use crate::pipeline::models::PipelineStepStatus;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let started_sql = match status {
+            PipelineStepStatus::Running | PipelineStepStatus::Starting => {
+                "started_at = datetime('now'),"
+            }
+            _ => "",
+        };
+        let completed_sql = match status {
+            PipelineStepStatus::Passed
+            | PipelineStepStatus::Failed
+            | PipelineStepStatus::NeedsChanges
+            | PipelineStepStatus::Cancelled
+            | PipelineStepStatus::Skipped => "completed_at = datetime('now'),",
+            _ => "",
+        };
+        let sql = format!(
+            "UPDATE pipeline_steps SET status = ?1, {started_sql} {completed_sql} error = ?2 WHERE id = ?3"
+        );
+        conn.execute(&sql, params![status.to_string(), error, step_id])?;
+        Ok(())
+    }
+
+    pub fn link_step_session(
+        &self,
+        step_id: crate::pipeline::models::PipelineStepId,
+        session_id: i64,
+        attempt: i64,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO pipeline_step_sessions (pipeline_step_id, session_id, attempt)
+             VALUES (?1, ?2, ?3)",
+            params![step_id, session_id, attempt],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_pipeline_artifact(
+        &self,
+        pipeline_id: crate::pipeline::models::PipelineId,
+        step_id: Option<crate::pipeline::models::PipelineStepId>,
+        artifact_type: &str,
+        content: &serde_json::Value,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let version: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM pipeline_artifacts
+             WHERE pipeline_id = ?1 AND artifact_type = ?2",
+            params![pipeline_id, artifact_type],
+            |row| row.get(0),
+        )?;
+        let content_json = serde_json::to_string(content).unwrap_or_default();
+        conn.execute(
+            "INSERT INTO pipeline_artifacts (pipeline_id, step_id, artifact_type, version, content_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![pipeline_id, step_id, artifact_type, version + 1, content_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn append_pipeline_event(
+        &self,
+        pipeline_id: crate::pipeline::models::PipelineId,
+        step_id: Option<crate::pipeline::models::PipelineStepId>,
+        event_type: &str,
+        payload: Option<&serde_json::Value>,
+    ) -> SqlResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let payload_json = payload.map(|p| serde_json::to_string(p).unwrap_or_default());
+        conn.execute(
+            "INSERT INTO pipeline_events (pipeline_id, step_id, event_type, payload_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![pipeline_id, step_id, event_type, payload_json],
+        )?;
+        Ok(())
+    }
+
+    fn get_pipeline_steps_conn(
+        &self,
+        conn: &Connection,
+        pipeline_id: crate::pipeline::models::PipelineId,
+    ) -> SqlResult<Vec<crate::pipeline::models::PipelineStep>> {
+        use crate::pipeline::models::{PipelineAgentRole, PipelineStep, PipelineStepStatus};
+        let mut stmt = conn.prepare(
+            "SELECT ps.id, ps.pipeline_id, ps.role, ps.status, ps.provider_id, ps.model,
+                    ps.attempt, ps.started_at, ps.completed_at, ps.error,
+                    pss.session_id
+             FROM pipeline_steps ps
+             LEFT JOIN pipeline_step_sessions pss
+                 ON pss.pipeline_step_id = ps.id AND pss.attempt = ps.attempt
+             WHERE ps.pipeline_id = ?1
+             ORDER BY ps.id",
+        )?;
+        stmt.query_map(params![pipeline_id], |row| {
+            let role_str: String = row.get(2)?;
+            let status_str: String = row.get(3)?;
+            Ok(PipelineStep {
+                id: row.get(0)?,
+                pipeline_id: row.get(1)?,
+                role: role_str.parse().unwrap_or(PipelineAgentRole::Planner),
+                status: status_str.parse().unwrap_or(PipelineStepStatus::Pending),
+                provider_id: row.get(4)?,
+                model: row.get(5)?,
+                attempt: row.get(6)?,
+                started_at: row.get(7)?,
+                completed_at: row.get(8)?,
+                error: row.get(9)?,
+                session_id: row.get(10)?,
+            })
+        })
+        .and_then(|rows| rows.collect())
     }
 
     pub fn create_project(&self, name: &str, path: &str) -> SqlResult<Project> {
@@ -975,6 +1316,12 @@ impl DatabaseService {
         Ok(list)
     }
 
+    /// Build the usage dashboard summary from the current SQLite snapshots.
+    ///
+    /// @return Aggregated token, cost, session and provider-quota data.
+    /// @throws rusqlite::Error If SQLite cannot read one of the dashboard queries.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
     pub fn get_usage_overview(&self) -> SqlResult<crate::models::UsageOverview> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -1052,6 +1399,11 @@ impl DatabaseService {
             .collect::<SqlResult<Vec<_>>>()
             .unwrap_or_default();
 
+        // Release the connection mutex before calling the helper. The helper acquires
+        // the same mutex and would otherwise deadlock because Mutex is not re-entrant.
+        drop(model_stmt);
+        drop(proj_stmt);
+        drop(conn);
         let quotas = self.get_latest_provider_quotas().unwrap_or_default();
 
         Ok(crate::models::UsageOverview {
@@ -1889,6 +2241,23 @@ mod tests {
         assert_eq!(history[2].account_id, "profile-b");
     }
 
+    /// Verify the usage dashboard can read quota snapshots without re-locking SQLite.
+    ///
+    /// @return No value; assertions verify the overview query completes successfully.
+    /// @throws Panic If the usage overview cannot be assembled from an empty database.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_build_usage_overview_without_reentrant_connection_lock() {
+        let database = make_db();
+        let overview = database
+            .get_usage_overview()
+            .expect("usage overview should not deadlock while reading quotas");
+
+        assert_eq!(overview.total_tokens_today, 0);
+        assert!(overview.quotas.is_empty());
+    }
+
     /// Verify checked profiles are selected one time each without returning to an exhausted account.
     ///
     /// @return No value; assertions verify pool selection and session history guards.
@@ -2319,5 +2688,179 @@ mod tests {
         let s2 = db.get_session(pid2).unwrap().unwrap();
         t.none("ssh_host is None for local session", &s2.ssh_host);
         t.none("ssh_user is None for local session", &s2.ssh_user);
+    }
+
+    // ── Pipeline DB tests ───────────────────────────────────────────────────
+
+    fn default_pipeline_config() -> crate::pipeline::models::PipelineConfig {
+        crate::pipeline::models::PipelineConfig::default_preset("claude-code", "auto")
+    }
+
+    #[test]
+    fn should_create_and_retrieve_pipeline() {
+        let mut t = TestCase::new("should_create_and_retrieve_pipeline");
+        let db = DatabaseService::open_in_memory().unwrap();
+
+        t.phase("Create");
+        let cfg = default_pipeline_config();
+        let id = db
+            .create_pipeline("PayPal feature", "Add PayPal payment", Some("/repo"), &cfg)
+            .expect("create failed");
+        t.ok("create returns positive id", id > 0);
+
+        t.phase("Retrieve");
+        let p = db.get_pipeline(id).expect("get failed").expect("missing");
+        t.eq("name stored", p.name.as_str(), "PayPal feature");
+        t.eq(
+            "user_request stored",
+            p.user_request.as_str(),
+            "Add PayPal payment",
+        );
+        t.eq(
+            "worktree_path stored",
+            p.worktree_path.as_deref(),
+            Some("/repo"),
+        );
+        t.eq(
+            "status is created",
+            &p.status,
+            &crate::pipeline::models::PipelineStatus::Created,
+        );
+        t.eq("no steps yet", p.steps.len(), 0);
+    }
+
+    #[test]
+    fn should_update_pipeline_status() {
+        let mut t = TestCase::new("should_update_pipeline_status");
+        let db = DatabaseService::open_in_memory().unwrap();
+        let id = db
+            .create_pipeline("test", "req", None, &default_pipeline_config())
+            .unwrap();
+
+        t.phase("Transition to Planning");
+        db.update_pipeline_status(id, &crate::pipeline::models::PipelineStatus::Planning)
+            .expect("update failed");
+        let p = db.get_pipeline(id).unwrap().unwrap();
+        t.eq(
+            "status is planning",
+            &p.status,
+            &crate::pipeline::models::PipelineStatus::Planning,
+        );
+    }
+
+    #[test]
+    fn should_create_and_list_pipeline_steps() {
+        let mut t = TestCase::new("should_create_and_list_pipeline_steps");
+        let db = DatabaseService::open_in_memory().unwrap();
+        let pid = db
+            .create_pipeline("pipeline", "req", None, &default_pipeline_config())
+            .unwrap();
+
+        t.phase("Add steps");
+        db.create_pipeline_step(
+            pid,
+            &crate::pipeline::models::PipelineAgentRole::Planner,
+            "claude-code",
+            Some("opus"),
+        )
+        .expect("planner step failed");
+        db.create_pipeline_step(
+            pid,
+            &crate::pipeline::models::PipelineAgentRole::Developer,
+            "codex",
+            Some("gpt-latest"),
+        )
+        .expect("developer step failed");
+
+        t.phase("Retrieve");
+        let p = db.get_pipeline(pid).unwrap().unwrap();
+        t.eq("2 steps", p.steps.len(), 2);
+        t.eq(
+            "first role is planner",
+            &p.steps[0].role,
+            &crate::pipeline::models::PipelineAgentRole::Planner,
+        );
+        t.eq(
+            "second role is developer",
+            &p.steps[1].role,
+            &crate::pipeline::models::PipelineAgentRole::Developer,
+        );
+        t.eq(
+            "first step is pending",
+            &p.steps[0].status,
+            &crate::pipeline::models::PipelineStepStatus::Pending,
+        );
+    }
+
+    #[test]
+    fn should_list_pipelines_newest_first() {
+        let mut t = TestCase::new("should_list_pipelines_newest_first");
+        let db = DatabaseService::open_in_memory().unwrap();
+        let cfg = default_pipeline_config();
+        db.create_pipeline("first", "r", None, &cfg).unwrap();
+        db.create_pipeline("second", "r", None, &cfg).unwrap();
+        db.create_pipeline("third", "r", None, &cfg).unwrap();
+
+        let list = db.list_pipelines().unwrap();
+        t.eq("3 pipelines", list.len(), 3);
+        t.eq("newest first", list[0].name.as_str(), "third");
+        t.eq("oldest last", list[2].name.as_str(), "first");
+    }
+
+    #[test]
+    fn should_save_and_version_pipeline_artifact() {
+        let mut t = TestCase::new("should_save_and_version_pipeline_artifact");
+        let db = DatabaseService::open_in_memory().unwrap();
+        let pid = db
+            .create_pipeline("p", "r", None, &default_pipeline_config())
+            .unwrap();
+
+        let v1 = serde_json::json!({"plan": "v1"});
+        let v2 = serde_json::json!({"plan": "v2"});
+
+        db.save_pipeline_artifact(pid, None, "implementation_plan", &v1)
+            .expect("v1 failed");
+        db.save_pipeline_artifact(pid, None, "implementation_plan", &v2)
+            .expect("v2 failed");
+
+        // Verify both versions exist with correct version numbers
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pipeline_artifacts WHERE pipeline_id = ?1 AND artifact_type = 'implementation_plan'",
+                rusqlite::params![pid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        t.eq("2 artifact versions stored", count, 2);
+    }
+
+    #[test]
+    fn should_append_pipeline_events() {
+        let mut t = TestCase::new("should_append_pipeline_events");
+        let db = DatabaseService::open_in_memory().unwrap();
+        let pid = db
+            .create_pipeline("p", "r", None, &default_pipeline_config())
+            .unwrap();
+
+        db.append_pipeline_event(pid, None, "pipeline_created", None)
+            .expect("event 1 failed");
+        db.append_pipeline_event(
+            pid,
+            None,
+            "status_changed_planning",
+            Some(&serde_json::json!({"from": "created", "to": "planning"})),
+        )
+        .expect("event 2 failed");
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pipeline_events WHERE pipeline_id = ?1",
+                rusqlite::params![pid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        t.eq("2 events stored", count, 2);
     }
 }
