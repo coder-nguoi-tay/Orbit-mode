@@ -24,8 +24,27 @@ impl SessionState {
 }
 
 /// Create a session: returns immediately after creating the DB record (status = "initializing").
-/// The actual CLI process spawns in a background thread — non-blocking.
-/// Frontend should listen to "session:running" (ready) or "session:error" (spawn failed).
+/// Create an account-bound session and schedule its provider process.
+///
+/// @param project_path Project containing the worktree.
+/// @param prompt Initial user task.
+/// @param model Requested provider model.
+/// @param permission_mode Provider permission setting.
+/// @param session_name Optional agent label.
+/// @param use_worktree Whether to create a dedicated worktree.
+/// @param provider Provider selected by the user.
+/// @param provider_account_id Explicit account profile, when selected.
+/// @param api_key Legacy provider API key option.
+/// @param ssh_host Optional remote host.
+/// @param ssh_user Optional remote user.
+/// @param ssh_key_path Optional remote private-key path.
+/// @param state Shared session manager.
+/// @param registry Provider registry.
+/// @param app Application event emitter.
+/// @return Session record before the asynchronous process starts.
+/// @throws IpcError If session or account validation fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-25
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn create_session(
@@ -36,6 +55,7 @@ pub fn create_session(
     session_name: Option<String>,
     use_worktree: Option<bool>,
     provider: Option<String>,
+    provider_account_id: Option<String>,
     api_key: Option<String>,
     ssh_host: Option<String>,
     ssh_user: Option<String>,
@@ -53,7 +73,26 @@ pub fn create_session(
 
     let session = {
         let mut m = state.write();
-        let s = m.init_session(
+        if let Some(ref account_id) = provider_account_id {
+            let account =
+                m.db.get_provider_account(account_id)?
+                    .ok_or_else(|| IpcError::Other("Account not found".to_string()))?;
+            if account.provider_id != provider.as_deref().unwrap_or_default()
+                || ssh_host.is_some()
+                || matches!(
+                    account.status,
+                    crate::models::AccountStatus::NeedsLogin
+                        | crate::models::AccountStatus::AuthExpired
+                        | crate::models::AccountStatus::QuotaExceeded
+                        | crate::models::AccountStatus::Unavailable
+                )
+            {
+                return Err(IpcError::Other(
+                    "Selected account is unavailable or incompatible".to_string(),
+                ));
+            }
+        }
+        let mut s = m.init_session(
             &project_path,
             session_name.as_deref(),
             &mode,
@@ -64,6 +103,10 @@ pub fn create_session(
             ssh_user.as_deref(),
             ssh_key_path,
         )?;
+        if let Some(ref account_id) = provider_account_id {
+            m.bind_session_provider_account(s.id, account_id)?;
+            s.provider_account_id = Some(account_id.clone());
+        }
         // Set API key before spawn thread starts — avoids race condition
         if let Some(key) = api_key {
             m.set_api_key(s.id, key);
@@ -110,7 +153,7 @@ pub fn create_session(
     let reg = Arc::clone(&registry.0);
     let session_id = session.id;
     std::thread::spawn(move || {
-        SessionManager::do_spawn(manager, app, session_id, prompt, &reg);
+        SessionManager::do_spawn(manager, app, session_id, prompt, reg);
     });
 
     Ok(session)

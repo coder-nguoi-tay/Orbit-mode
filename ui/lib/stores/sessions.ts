@@ -20,10 +20,20 @@ export interface Session {
   id: number;
   projectId: number | null;
   name: string | null;
-  status: 'initializing' | 'running' | 'waiting' | 'working' | 'completed' | 'stopped' | 'error';
+  status:
+    | 'initializing'
+    | 'running'
+    | 'waiting'
+    | 'working'
+    | 'completed'
+    | 'stopped'
+    | 'error'
+    | 'needs_account_action'
+    | 'ready_to_resume';
   permissionMode: string;
   model: string | null;
   provider: string;
+  providerAccountId?: string | null;
   pid: number | null;
   cwd: string | null;
   projectName: string | null;

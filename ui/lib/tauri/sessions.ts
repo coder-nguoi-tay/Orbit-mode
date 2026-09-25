@@ -10,6 +10,7 @@ export interface CreateSessionOptions {
   sessionName?: string;
   useWorktree?: boolean;
   provider?: string;
+  providerAccountId?: string;
   /** Provider API key. Set before spawn to avoid race condition. */
   apiKey?: string;
   sshHost?: string;
@@ -18,6 +19,13 @@ export interface CreateSessionOptions {
   sshKeyPath?: string;
 }
 
+/** Create a provider session with an explicit account binding when selected.
+ * @param opts Project, provider, account and initial prompt settings.
+ * @return Newly persisted session before its provider process starts.
+ * @throws When the backend rejects the account or session settings.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-25
+ */
 export async function createSession(opts: CreateSessionOptions): Promise<Session> {
   return await invoke('create_session', {
     projectPath: opts.projectPath,
@@ -27,6 +35,7 @@ export async function createSession(opts: CreateSessionOptions): Promise<Session
     sessionName: opts.sessionName ?? null,
     useWorktree: opts.useWorktree ?? false,
     provider: opts.provider ?? 'claude-code',
+    providerAccountId: opts.providerAccountId ?? null,
     apiKey: opts.apiKey ?? null,
     sshHost: opts.sshHost ?? null,
     sshUser: opts.sshUser ?? null,

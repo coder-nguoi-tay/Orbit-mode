@@ -148,6 +148,17 @@ export async function webInvoke<T>(cmd: string, args?: Args): Promise<T> {
       }) as Promise<T>;
 
     // ── Commands that are no-ops in web mode ──────────────────
+    case 'get_provider_accounts':
+    case 'get_session_account_history':
+      return [] as unknown as T;
+    case 'get_provider_account_auto_handoff':
+      return false as unknown as T;
+    case 'get_project_codex_account':
+      return null as unknown as T;
+    case 'set_project_provider_account':
+    case 'clear_project_codex_account':
+    case 'set_provider_account_auto_handoff':
+      return null as unknown as T;
     case 'diagnose_spawn':
     case 'check_update':
     case 'install_update':

@@ -68,6 +68,7 @@ impl Provider for CodexProvider {
                 prompt: config.prompt,
                 codex_session_id: config.resume_id,
                 skip_permissions: config.skip_permissions,
+                account_home: config.account_home,
             }),
             SpawnMode::Ssh { ref host, ref user } => {
                 let mut parts: Vec<String> = codex_ssh_command_tokens(

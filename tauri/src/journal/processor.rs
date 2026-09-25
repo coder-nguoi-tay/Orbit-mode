@@ -949,6 +949,105 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
             state.status = AgentStatus::Idle;
         }
 
+        "event_msg" => {
+            if let Some(payload) = val.get("payload") {
+                if payload.get("type").and_then(|v| v.as_str()) == Some("token_count") {
+                    if let Some(info) = payload.get("info") {
+                        if let Some(usage) = info.get("total_token_usage") {
+                            state.input_tokens = usage
+                                .get("input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(state.input_tokens);
+                            state.cache_read = usage
+                                .get("cached_input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(state.cache_read);
+                            state.cache_write = usage
+                                .get("cache_write_input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(state.cache_write);
+                            state.output_tokens = usage
+                                .get("output_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(state.output_tokens);
+                        }
+                    }
+
+                    if let Some(rate_limits) = payload.get("rate_limits") {
+                        if let Some(primary) = rate_limits.get("primary").filter(|v| !v.is_null()) {
+                            let used_pct = primary
+                                .get("used_percent")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            let window_min = primary
+                                .get("window_minutes")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(10080);
+                            let resets_at = primary.get("resets_at").and_then(|v| v.as_i64());
+                            let limit_type = if window_min >= 1440 {
+                                "seven_day"
+                            } else {
+                                "five_hour"
+                            };
+
+                            let entry = crate::models::RateLimitInfo {
+                                status: "normal".into(),
+                                rate_limit_type: limit_type.into(),
+                                utilization: used_pct / 100.0,
+                                resets_at,
+                                is_using_overage: false,
+                                surpassed_threshold: 0.0,
+                            };
+                            if let Some(existing) = state
+                                .rate_limit
+                                .iter_mut()
+                                .find(|r| r.rate_limit_type == limit_type)
+                            {
+                                *existing = entry;
+                            } else {
+                                state.rate_limit.push(entry);
+                            }
+                        }
+
+                        if let Some(sec) = rate_limits.get("secondary").filter(|v| !v.is_null()) {
+                            let used_pct = sec
+                                .get("used_percent")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            let window_min = sec
+                                .get("window_minutes")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(300);
+                            let resets_at = sec.get("resets_at").and_then(|v| v.as_i64());
+                            let limit_type = if window_min >= 1440 {
+                                "seven_day"
+                            } else {
+                                "five_hour"
+                            };
+
+                            let entry = crate::models::RateLimitInfo {
+                                status: "normal".into(),
+                                rate_limit_type: limit_type.into(),
+                                utilization: used_pct / 100.0,
+                                resets_at,
+                                is_using_overage: false,
+                                surpassed_threshold: 0.0,
+                            };
+                            if let Some(existing) = state
+                                .rate_limit
+                                .iter_mut()
+                                .find(|r| r.rate_limit_type == limit_type)
+                            {
+                                *existing = entry;
+                            } else {
+                                state.rate_limit.push(entry);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // User messages are stored in Claude format by emit_spawn_started
         _ => {
             process_line(state, line);

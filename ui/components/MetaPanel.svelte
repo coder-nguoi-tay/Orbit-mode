@@ -14,6 +14,8 @@
   import { providerCaps, getCaps } from '../lib/stores/providers';
   import { workspace, assignSession } from '../lib/stores/workspace';
   import { get } from 'svelte/store';
+  import { providerAccounts } from '../lib/stores/providerAccounts';
+  import { getSessionAccountHistory, type SessionAccountEvent } from '../lib/tauri/accounts';
 
   export let session: Session;
   $: caps = getCaps($providerCaps, session.provider);
@@ -23,6 +25,30 @@
   $: if (!caps.supportsTasks && tab === 'tasks') tab = 'stats';
 
   let refreshing = false;
+  let accountHistory: SessionAccountEvent[] = [];
+  let loadedHistorySessionId: number | null = null;
+
+  /** Load non-sensitive profile transitions for the selected session.
+   * @param sessionId Session whose account history is shown.
+   * @return Completion after history is loaded or safely cleared.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-25
+   */
+  async function loadAccountHistory(sessionId: number): Promise<void> {
+    try {
+      const history = await getSessionAccountHistory(sessionId);
+      if (loadedHistorySessionId === sessionId)
+        accountHistory = Array.isArray(history) ? history : [];
+    } catch {
+      if (loadedHistorySessionId === sessionId) accountHistory = [];
+    }
+  }
+
+  $: if (loadedHistorySessionId !== session.id) {
+    loadedHistorySessionId = session.id;
+    accountHistory = [];
+    void loadAccountHistory(session.id);
+  }
 
   async function stop() {
     try {
@@ -204,6 +230,11 @@
 
         <div class="stat-group meta-info">
           <div class="stat-row">
+            <span>account</span><span class="mono-val"
+              >{$providerAccounts[session.providerAccountId ?? '']?.label ?? 'Unassigned'}</span
+            >
+          </div>
+          <div class="stat-row">
             <span>model</span><span class="mono-val" title={session.model ?? ''}
               >{modelShortName(session.model)}</span
             >
@@ -222,6 +253,18 @@
             <span>mode</span><span class="mono-val">{session.permissionMode}</span>
           </div>
         </div>
+        {#if accountHistory.length > 0}
+          <div class="stat-group">
+            <div class="stat-label">account history</div>
+            {#each accountHistory as transition}
+              <div class="stat-row" title={transition.createdAt}>
+                <span>{transition.event.replace('_', ' ')}</span><span class="mono-val"
+                  >{transition.label}</span
+                >
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else if tab === 'tasks'}
       <TasksList sessionId={String(session.id)} />

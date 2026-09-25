@@ -571,6 +571,13 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
   await delay(80); // realistic latency
 
   switch (cmd) {
+    case 'get_provider_accounts':
+    case 'get_session_account_history':
+      return [];
+    case 'get_provider_account_auto_handoff':
+      return false;
+    case 'set_provider_account_auto_handoff':
+      return null;
     case 'list_sessions':
       return sessions;
 
@@ -1058,6 +1065,104 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case 'respond_permission':
     case 'clear_attention':
       return null;
+
+    case 'get_usage_overview':
+      return {
+        totalTokensToday: 27900000,
+        totalCostToday: 6.66,
+        activeAgentsCount: 7,
+        totalSessionsCount: 12,
+        quotas: [
+          {
+            provider: 'codex',
+            accountKey: 'default',
+            fiveHour: {
+              utilization: 0.72,
+              resetsAt: Date.now() + 2 * 3600 * 1000 + 14 * 60 * 1000,
+              status: null,
+            },
+            sevenDay: {
+              utilization: 0.48,
+              resetsAt: Date.now() + 3 * 24 * 3600 * 1000,
+              status: null,
+            },
+            updatedAt: new Date().toISOString(),
+            source: 'provider_event',
+          },
+          {
+            provider: 'claude-code',
+            accountKey: 'default',
+            fiveHour: {
+              utilization: 0.34,
+              resetsAt: Date.now() + 1 * 3600 * 1000 + 7 * 60 * 1000,
+              status: null,
+            },
+            sevenDay: {
+              utilization: 0.63,
+              resetsAt: Date.now() + 2 * 24 * 3600 * 1000,
+              status: null,
+            },
+            updatedAt: new Date().toISOString(),
+            source: 'provider_event',
+          },
+        ],
+        projectSummaries: [
+          {
+            projectName: 'CRM',
+            totalTokens: 12800000,
+            estimatedCostUsd: 3.2,
+            agentCount: 5,
+          },
+        ],
+        modelSummaries: [
+          {
+            model: 'gpt-5.6',
+            provider: 'codex',
+            totalTokens: 18200000,
+            estimatedCostUsd: 4.82,
+            sessionCount: 4,
+          },
+        ],
+      };
+
+    case 'get_provider_quotas':
+      return [
+        {
+          provider: 'codex',
+          accountKey: 'default',
+          fiveHour: {
+            utilization: 0.72,
+            resetsAt: Date.now() + 2 * 3600 * 1000 + 14 * 60 * 1000,
+            status: null,
+          },
+          sevenDay: {
+            utilization: 0.48,
+            resetsAt: Date.now() + 3 * 24 * 3600 * 1000,
+            status: null,
+          },
+          updatedAt: new Date().toISOString(),
+          source: 'provider_event',
+        },
+        {
+          provider: 'claude-code',
+          accountKey: 'default',
+          fiveHour: {
+            utilization: 0.34,
+            resetsAt: Date.now() + 1 * 3600 * 1000 + 7 * 60 * 1000,
+            status: null,
+          },
+          sevenDay: {
+            utilization: 0.63,
+            resetsAt: Date.now() + 2 * 24 * 3600 * 1000,
+            status: null,
+          },
+          updatedAt: new Date().toISOString(),
+          source: 'provider_event',
+        },
+      ];
+
+    case 'get_session_usages':
+      return [];
 
     default:
       console.warn('[mock] Unhandled invoke:', cmd, args);

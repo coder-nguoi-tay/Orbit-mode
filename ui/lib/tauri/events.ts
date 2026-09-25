@@ -1,5 +1,11 @@
 import type { Session, TokenUsage, MiniLogEntry } from '../stores/sessions';
-import type { JournalEntry, SubagentInfo } from '../types';
+import type {
+  JournalEntry,
+  SubagentInfo,
+  ProviderQuota,
+  SessionUsageSnapshot,
+  RateLimitInfo,
+} from '../types';
 import { listen } from './invoke';
 
 export interface SessionOutputPayload {
@@ -19,7 +25,7 @@ export interface SessionStatePayload {
   model: string | null;
   contextWindow: number | null;
   attention: { requiresAttention: boolean; reason: string | null; since: string | null } | null;
-  rateLimit: import('../types').RateLimitInfo[];
+  rateLimit: RateLimitInfo[];
   costUsd: number | null;
 }
 
@@ -96,4 +102,58 @@ export interface SubagentCreatedPayload {
 
 export function onSessionSubagentCreated(cb: (payload: SubagentCreatedPayload) => void) {
   return listen<SubagentCreatedPayload>('session:subagent-created', (e) => cb(e.payload));
+}
+
+export function onSessionUsageUpdated(cb: (payload: SessionUsageSnapshot) => void) {
+  return listen<SessionUsageSnapshot>('session:usage-updated', (e) => cb(e.payload));
+}
+
+export function onProviderQuotaUpdated(cb: (payload: ProviderQuota) => void) {
+  return listen<ProviderQuota>('provider:quota-updated', (e) => cb(e.payload));
+}
+
+/** Observe sessions paused after an authoritative account quota event.
+ * @param callback Receives the affected Orbit session ID.
+ * @return Event listener cleanup handle.
+ * @throws When the event listener cannot be installed.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-25
+ */
+export function onSessionAccountActionRequired(
+  callback: (sessionId: number) => void
+): Promise<() => void> {
+  return listen<{ sessionId: number }>('session:account-action-required', (event) =>
+    callback(event.payload.sessionId)
+  );
+}
+
+/** Observe a committed account transition after a new process starts.
+ * @param callback Receives the session and new account IDs.
+ * @return Event listener cleanup handle.
+ * @throws When the event listener cannot be installed.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-25
+ */
+export function onSessionAccountChanged(
+  callback: (payload: { sessionId: number; providerAccountId: string }) => void
+): Promise<() => void> {
+  return listen<{ sessionId: number; providerAccountId: string }>(
+    'session:account-changed',
+    (event) => callback(event.payload)
+  );
+}
+
+/** Observe a failed handoff while the original account binding stays intact.
+ * @param callback Receives the failed session and error.
+ * @return Event listener cleanup handle.
+ * @throws When the event listener cannot be installed.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-25
+ */
+export function onSessionHandoffFailed(
+  callback: (payload: { sessionId: number; error: string }) => void
+): Promise<() => void> {
+  return listen<{ sessionId: number; error: string }>('session:handoff-failed', (event) =>
+    callback(event.payload)
+  );
 }

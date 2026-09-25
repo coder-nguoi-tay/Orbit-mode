@@ -12,6 +12,7 @@
   import type { ApiKeyCreated, ApiKeyInfo } from '../lib/tauri';
   import Modal from './shared/Modal.svelte';
   import PhoneLinkModal from './PhoneLinkModal.svelte';
+  import AccountManager from './AccountManager.svelte';
   import { generateQrSvg } from '../lib/qr';
 
   const dispatch = createEventDispatcher<{ close: void }>();
@@ -34,7 +35,7 @@
 
   let resetting = false;
   let confirmReset = false;
-  let activeTab: 'mobile' | 'server' | 'danger' = 'mobile';
+  let activeTab: 'mobile' | 'server' | 'accounts' | 'danger' = 'mobile';
 
   $: connectHost =
     host === '127.0.0.1' || host === 'localhost' || host === '0.0.0.0' ? lanIp : host;
@@ -136,6 +137,11 @@
       class="tab"
       class:active={activeTab === 'server'}
       on:click={() => (activeTab = 'server')}>server & keys</button
+    >
+    <button
+      class="tab"
+      class:active={activeTab === 'accounts'}
+      on:click={() => (activeTab = 'accounts')}>accounts</button
     >
     <button
       class="tab"
@@ -245,6 +251,10 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  {#if activeTab === 'accounts'}
+    <AccountManager />
   {/if}
 
   {#if activeTab === 'server'}

@@ -70,13 +70,17 @@ vi.mock('$lib/tauri', () => ({
   getSubagents: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('$lib/cost', () => ({
-  formatTokens: vi.fn((n: number) => {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
-    return String(n);
-  }),
-}));
+vi.mock('$lib/cost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/cost')>();
+  return {
+    ...actual,
+    formatTokens: vi.fn((n: number) => {
+      if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+      if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+      return String(n);
+    }),
+  };
+});
 
 vi.mock('$lib/status', () => ({
   isActive: vi.fn((status: string) =>

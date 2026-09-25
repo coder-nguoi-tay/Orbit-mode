@@ -11,6 +11,7 @@
   import ProviderSelector from './shared/ProviderSelector.svelte';
   import SshFields from './shared/SshFields.svelte';
   import { browseButtonLabel } from '../lib/shortcuts';
+  import { providerAccounts, refreshProviderAccounts } from '../lib/stores/providerAccounts';
 
   const dispatch = createEventDispatcher<{
     done: { session: Session };
@@ -34,13 +35,23 @@
   let sshHost = '';
   let sshUser = 'ubuntu';
   let sshKeyPath = '';
+  let selectedAccountId = '';
 
   $: backends = $backendsStore;
   $: selectedBackend = backends.find((b) => b.id === backendId) ?? null;
   $: caps = getCaps($providerCaps, backendId);
   $: hasSubProviders = selectedBackend?.hasSubProviders ?? false;
+  $: codexAccounts = Object.values($providerAccounts).filter(
+    (account) => account.providerId === 'codex' && account.executionScope === 'local'
+  );
+  $: if (codexAccounts.length === 1 && !selectedAccountId) {
+    selectedAccountId = codexAccounts[0].id;
+  }
 
   onMount(async () => {
+    await refreshProviderAccounts().catch((failure) =>
+      console.warn('[NewSessionModal] account list unavailable:', failure)
+    );
     if ($backendsStore.length === 0) {
       try {
         backendsStore.set(await getProviders());
@@ -87,6 +98,12 @@
     return model;
   }
 
+  /** Create the requested agent with its selected Codex profile.
+   * @return Completion after the backend schedules the new session.
+   * @throws Displays validation or spawn errors in the modal.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-25
+   */
   async function submit() {
     if (!path.trim()) {
       error = sshMode ? 'remote path required' : 'project path required';
@@ -144,6 +161,10 @@
         sessionName: finalName,
         useWorktree,
         provider: resolvedProvider,
+        providerAccountId:
+          resolvedProvider === 'codex' && !sshMode && selectedAccountId
+            ? selectedAccountId
+            : undefined,
         sshHost: sshMode ? sshHost.trim() : undefined,
         sshUser: sshMode ? sshUser.trim() : undefined,
         sshKeyPath: sshMode && sshKeyPath.trim() ? sshKeyPath.trim() : undefined,
@@ -171,6 +192,25 @@
     bind:sshMode
     {loading}
   />
+
+  {#if backendId === 'codex' && !sshMode}
+    <div class="field">
+      <label class="label" for="ns-account">account</label>
+      <select id="ns-account" class="input" bind:value={selectedAccountId} disabled={loading}>
+        <option value="">Project / provider default</option>
+        {#each codexAccounts as account}
+          <option
+            value={account.id}
+            disabled={['needs_login', 'auth_expired', 'quota_exceeded', 'unavailable'].includes(
+              account.status
+            )}
+          >
+            {account.label} · {account.status}
+          </option>
+        {/each}
+      </select>
+    </div>
+  {/if}
 
   {#if sshMode}
     <SshFields bind:sshHost bind:sshUser bind:sshKeyPath {loading} />

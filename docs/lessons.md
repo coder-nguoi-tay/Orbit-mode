@@ -4,6 +4,16 @@ Padrões de erro identificados durante o desenvolvimento. Leia ao início de cad
 
 ---
 
+## Quotas por conta
+
+**Regra:** Ao receber um evento de quota de uma janela, preservar a última amostra da outra janela para a mesma conta e indexar o estado por `provider_account_id`.
+
+**Por quê:** Eventos Codex de 5h e 7d chegam separadamente; substituir o objeto inteiro apaga a janela anterior e pode liberar uma conta ainda esgotada. A utilização é uma fração entre 0 e 1, então a UI precisa multiplicar por 100 para exibir porcentagem.
+
+**Quando aplicar:** Em stores, snapshots, notificações e telas de uso com múltiplos perfis.
+
+---
+
 ## GIF / Puppeteer
 
 **Regra:** O parâmetro `delay` do gifenc está em **milissegundos** (não centissegundos como o spec GIF). Use `Math.round(1000 / FPS)`.

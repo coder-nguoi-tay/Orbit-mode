@@ -219,3 +219,35 @@ pub fn get_rate_limits(pid: Option<i32>) -> RateLimits {
 pub fn get_changelog() -> String {
     include_str!("../../../CHANGELOG.md").to_string()
 }
+
+#[tauri::command]
+pub fn get_usage_overview(
+    db: tauri::State<crate::services::database::DatabaseService>,
+) -> crate::models::UsageOverview {
+    db.get_usage_overview()
+        .unwrap_or(crate::models::UsageOverview {
+            total_tokens_today: 0,
+            total_cost_today: 0.0,
+            active_agents_count: 0,
+            total_sessions_count: 0,
+            quotas: vec![],
+            project_summaries: vec![],
+            model_summaries: vec![],
+        })
+}
+
+#[tauri::command]
+pub fn get_provider_quotas(
+    db: tauri::State<crate::services::database::DatabaseService>,
+) -> Vec<crate::models::ProviderQuota> {
+    db.get_latest_provider_quotas().unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_session_usages(
+    db: tauri::State<crate::services::database::DatabaseService>,
+    limit: Option<usize>,
+) -> Vec<crate::models::SessionUsageSnapshot> {
+    db.get_session_usages(limit.unwrap_or(50))
+        .unwrap_or_default()
+}

@@ -35,6 +35,7 @@ const { mockCreateSession, mockGetProviders, mockBackendsStore, mockProviderCaps
 
 vi.mock('$lib/tauri/invoke', () => ({
   HAS_TAURI: false,
+  invoke: vi.fn(async () => []),
 }));
 
 vi.mock('$lib/tauri', () => ({

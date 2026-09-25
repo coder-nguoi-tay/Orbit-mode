@@ -23,3 +23,33 @@ if (typeof Element !== 'undefined' && !Element.prototype.animate) {
     } as unknown as Animation;
   };
 }
+
+// Node 25+ exposes an unconfigured globalThis.localStorage object.
+// Ensure a working Storage implementation is attached.
+if (typeof window !== 'undefined') {
+  let store: Record<string, string> = {};
+  const storageMock = {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => {
+      store[key] = String(value);
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+    get length() {
+      return Object.keys(store).length;
+    },
+    key: (index: number) => Object.keys(store)[index] ?? null,
+  };
+  Object.defineProperty(window, 'localStorage', {
+    value: storageMock,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: storageMock,
+    writable: true,
+  });
+}

@@ -182,7 +182,7 @@ impl McpHandler {
         let app = self.app.clone();
         let prompt_owned = prompt.to_string();
         std::thread::spawn(move || {
-            SessionManager::do_spawn(manager, app, session_id, prompt_owned, &reg);
+            SessionManager::do_spawn(manager, app, session_id, prompt_owned, reg);
         });
 
         if !wait {

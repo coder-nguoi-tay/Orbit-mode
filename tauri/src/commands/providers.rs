@@ -78,13 +78,21 @@ pub fn build_cli_backends(registry: &crate::providers::ProviderRegistry) -> Vec<
                     default_levels.iter().map(|s| s.to_string()).collect(),
                 );
             }
+            if p.id() == "codex" {
+                let (_, cached_efforts) = get_codex_cached_models();
+                for (model_id, levels) in cached_efforts {
+                    effort_levels.insert(model_id, levels);
+                }
+            }
             for model in &models {
-                let levels = p.effort_levels(&model.id);
-                if !levels.is_empty() {
-                    effort_levels.insert(
-                        model.id.clone(),
-                        levels.iter().map(|s| s.to_string()).collect(),
-                    );
+                if !effort_levels.contains_key(&model.id) {
+                    let levels = p.effort_levels(&model.id);
+                    if !levels.is_empty() {
+                        effort_levels.insert(
+                            model.id.clone(),
+                            levels.iter().map(|s| s.to_string()).collect(),
+                        );
+                    }
                 }
             }
             CliBackend {
@@ -608,74 +616,196 @@ pub fn get_providers(
     build_cli_backends(&registry.0)
 }
 
-/// Return the hardcoded model list for a provider.
-/// Models are intrinsic to each CLI — not worth abstracting into the trait.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CodexCacheReasoningLevel {
+    #[serde(default)]
+    effort: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CodexCacheModel {
+    slug: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    visibility: Option<String>,
+    #[serde(default)]
+    context_window: Option<u64>,
+    #[serde(default)]
+    max_context_window: Option<u64>,
+    #[serde(default)]
+    supported_reasoning_levels: Vec<CodexCacheReasoningLevel>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CodexModelsCache {
+    #[serde(default)]
+    models: Vec<CodexCacheModel>,
+}
+
+/// Fallback model list if ~/.codex/models_cache.json is unavailable or unparseable.
+fn codex_fallback_models() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo {
+            id: "gpt-5.5".into(),
+            name: "gpt-5.5".into(),
+            context: None,
+            output: None,
+        },
+        ModelInfo {
+            id: "gpt-5.4".into(),
+            name: "gpt-5.4".into(),
+            context: None,
+            output: None,
+        },
+    ]
+}
+
+pub type ParsedCodexModels = (
+    Vec<ModelInfo>,
+    std::collections::HashMap<String, Vec<String>>,
+);
+
+pub fn parse_codex_models_json(content: &str) -> Result<ParsedCodexModels, String> {
+    let cache: CodexModelsCache =
+        serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    let mut models = Vec::new();
+    let mut effort_map = std::collections::HashMap::new();
+
+    for m in cache.models {
+        let is_visible = m.visibility.as_deref().is_none_or(|v| v == "list");
+        if !is_visible {
+            continue;
+        }
+
+        let name = m.display_name.clone().unwrap_or_else(|| m.slug.clone());
+        let context = m.max_context_window.or(m.context_window);
+
+        models.push(ModelInfo {
+            id: m.slug.clone(),
+            name,
+            context,
+            output: None,
+        });
+
+        let levels: Vec<String> = m
+            .supported_reasoning_levels
+            .into_iter()
+            .filter_map(|l| l.effort)
+            .collect();
+        if !levels.is_empty() {
+            effort_map.insert(m.slug, levels);
+        }
+    }
+
+    Ok((models, effort_map))
+}
+
+/// Reads Codex models dynamically by querying `codex debug models` CLI command live,
+/// falling back to `~/.codex/models_cache.json`, and finally to default fallback models.
+pub fn get_codex_cached_models() -> (
+    Vec<ModelInfo>,
+    std::collections::HashMap<String, Vec<String>>,
+) {
+    // 1. Try querying `codex debug models` live CLI command
+    if let Some(codex_path) = crate::services::spawn_manager::find_codex() {
+        let mut cmd = std::process::Command::new(codex_path);
+        cmd.args(["debug", "models"]);
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                if let Ok(content) = String::from_utf8(output.stdout) {
+                    if let Ok((models, effort_map)) = parse_codex_models_json(&content) {
+                        if !models.is_empty() {
+                            return (models, effort_map);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to reading ~/.codex/models_cache.json file
+    let cache_path = match dirs::home_dir() {
+        Some(home) => home.join(".codex").join("models_cache.json"),
+        None => {
+            eprintln!("[orbit] Codex model cache unavailable (home dir not found); falling back to default model list.");
+            return (codex_fallback_models(), std::collections::HashMap::new());
+        }
+    };
+
+    if !cache_path.exists() {
+        eprintln!(
+            "[orbit] Codex model cache unavailable ({}); falling back to default model list.",
+            cache_path.display()
+        );
+        return (codex_fallback_models(), std::collections::HashMap::new());
+    }
+
+    let content = match std::fs::read_to_string(&cache_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[orbit] Failed to read Codex model cache at {}: {e}; falling back to default model list.",
+                cache_path.display()
+            );
+            return (codex_fallback_models(), std::collections::HashMap::new());
+        }
+    };
+
+    match parse_codex_models_json(&content) {
+        Ok((models, effort_map)) => {
+            if models.is_empty() {
+                eprintln!(
+                    "[orbit] Codex model cache at {} contained no visible models; falling back to default model list.",
+                    cache_path.display()
+                );
+                (codex_fallback_models(), std::collections::HashMap::new())
+            } else {
+                (models, effort_map)
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "[orbit] Failed to parse Codex model cache JSON at {}: {e}; falling back to default model list.",
+                cache_path.display()
+            );
+            (codex_fallback_models(), std::collections::HashMap::new())
+        }
+    }
+}
+
+/// Return the provider model list.
+/// Claude Code uses family aliases; Codex reads dynamically from model cache.
 fn get_provider_models(provider_id: &str) -> Vec<ModelInfo> {
     match provider_id {
         "claude-code" => vec![
             ModelInfo {
-                id: "auto".into(),
-                name: "auto".into(),
+                id: "default".into(),
+                name: "Default".into(),
                 context: None,
                 output: None,
             },
             ModelInfo {
-                id: "claude-opus-4-7".into(),
-                name: "opus-4.7".into(),
-                context: Some(1_000_000),
-                output: Some(128_000),
+                id: "opus".into(),
+                name: "Opus".into(),
+                context: None,
+                output: None,
             },
             ModelInfo {
-                id: "claude-sonnet-4-6".into(),
-                name: "sonnet-4.6".into(),
-                context: Some(1_000_000),
-                output: Some(64_000),
+                id: "sonnet".into(),
+                name: "Sonnet".into(),
+                context: None,
+                output: None,
             },
             ModelInfo {
-                id: "claude-opus-4-6".into(),
-                name: "opus-4.6".into(),
-                context: Some(1_000_000),
-                output: Some(128_000),
-            },
-            ModelInfo {
-                id: "claude-haiku-4-5-20251001".into(),
-                name: "haiku-4.5".into(),
-                context: Some(200_000),
-                output: Some(64_000),
+                id: "haiku".into(),
+                name: "Haiku".into(),
+                context: None,
+                output: None,
             },
         ],
-        "codex" => vec![
-            ModelInfo {
-                id: "gpt-5.5".into(),
-                name: "gpt-5.5".into(),
-                context: Some(1_000_000),
-                output: Some(128_000),
-            },
-            ModelInfo {
-                id: "gpt-5.4".into(),
-                name: "gpt-5.4".into(),
-                context: Some(1_050_000),
-                output: Some(128_000),
-            },
-            ModelInfo {
-                id: "gpt-5.4-mini".into(),
-                name: "gpt-5.4-mini".into(),
-                context: Some(400_000),
-                output: Some(128_000),
-            },
-            ModelInfo {
-                id: "gpt-5.3-codex".into(),
-                name: "gpt-5.3-codex".into(),
-                context: Some(400_000),
-                output: Some(128_000),
-            },
-            ModelInfo {
-                id: "gpt-5.2".into(),
-                name: "gpt-5.2".into(),
-                context: Some(400_000),
-                output: Some(128_000),
-            },
-        ],
+        "codex" => get_codex_cached_models().0,
         _ => vec![], // OpenCode models come from sub-providers
     }
 }
@@ -1427,11 +1557,8 @@ mod tests {
             claude.task_format.as_str(),
             "claude_tool_use",
         );
-        t.len("claude built-in models", &claude.models, 5);
-        let opus_effort = claude
-            .effort_levels
-            .get("claude-opus-4-7")
-            .expect("opus effort map");
+        t.len("claude built-in models", &claude.models, 4);
+        let opus_effort = claude.effort_levels.get("opus").expect("opus effort map");
         t.ok(
             "opus effort includes xhigh",
             opus_effort.iter().any(|e| e == "xhigh"),
@@ -1445,7 +1572,10 @@ mod tests {
             codex.task_format.as_str(),
             "codex_item_list",
         );
-        t.len("codex built-in models", &codex.models, 5);
+        t.ok(
+            "codex models loaded from cache or fallback",
+            !codex.models.is_empty(),
+        );
 
         let opencode = &backends[2];
         t.ok(
@@ -1486,5 +1616,77 @@ mod tests {
             resolved.model.as_deref(),
             Some("ollama-cloud/kimi-k2.6:cloud"),
         );
+    }
+
+    #[test]
+    fn should_parse_valid_codex_models_cache_json() {
+        let json = r#"{
+            "models": [
+                {
+                    "slug": "gpt-6-astra",
+                    "display_name": "GPT-6 Astra",
+                    "visibility": "list",
+                    "context_window": 272000,
+                    "max_context_window": 872000,
+                    "supported_reasoning_levels": [
+                        { "effort": "low" },
+                        { "effort": "max" }
+                    ]
+                },
+                {
+                    "slug": "gpt-future-test-model",
+                    "display_name": "GPT Future",
+                    "visibility": "list",
+                    "context_window": 500000,
+                    "supported_reasoning_levels": [
+                        { "effort": "high" }
+                    ]
+                },
+                {
+                    "slug": "gpt-hidden-internal",
+                    "display_name": "Internal Only",
+                    "visibility": "hide"
+                }
+            ]
+        }"#;
+
+        let (models, efforts) = parse_codex_models_json(json).expect("parsed cache json");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-6-astra");
+        assert_eq!(models[0].name, "GPT-6 Astra");
+        assert_eq!(models[0].context, Some(872000));
+        assert_eq!(
+            efforts.get("gpt-6-astra"),
+            Some(&vec!["low".to_string(), "max".to_string()])
+        );
+
+        assert_eq!(models[1].id, "gpt-future-test-model");
+        assert_eq!(models[1].name, "GPT Future");
+        assert_eq!(models[1].context, Some(500000));
+    }
+
+    #[test]
+    fn should_handle_codex_models_cache_missing_fields() {
+        let json = r#"{
+            "models": [
+                {
+                    "slug": "minimal-model"
+                }
+            ]
+        }"#;
+
+        let (models, efforts) = parse_codex_models_json(json).expect("parsed minimal cache json");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "minimal-model");
+        assert_eq!(models[0].name, "minimal-model");
+        assert_eq!(models[0].context, None);
+        assert!(efforts.is_empty());
+    }
+
+    #[test]
+    fn should_fail_gracefully_on_invalid_json() {
+        let res = parse_codex_models_json("not valid json {");
+        assert!(res.is_err());
     }
 }

@@ -7,11 +7,19 @@ export type SessionStatus =
   | 'completed'
   | 'stopped'
   | 'error'
+  | 'needs_account_action'
+  | 'ready_to_resume'
   | 'working'
   | 'input'
   | 'idle'
   | 'new';
 
+/** Choose a visible session color, including quota pauses that need user action.
+ * @param status Persisted or live session status.
+ * @return Theme color token for the status.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-25
+ */
 export function statusColor(status: string): string {
   switch (status) {
     case 'working':
@@ -22,6 +30,10 @@ export function statusColor(status: string): string {
       return 'var(--s-input)';
     case 'initializing':
       return 'var(--s-init)';
+    case 'needs_account_action':
+      return 'var(--s-input)';
+    case 'ready_to_resume':
+      return 'var(--s-working)';
     case 'error':
       return 'var(--s-error)';
     case 'completed':
@@ -33,6 +45,12 @@ export function statusColor(status: string): string {
   }
 }
 
+/** Explain a session's account action state in the agent list.
+ * @param status Persisted or live session status.
+ * @return Short user-facing status label.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-25
+ */
 export function statusLabel(status: string): string {
   switch (status) {
     case 'working':
@@ -44,6 +62,10 @@ export function statusLabel(status: string): string {
       return 'waiting';
     case 'initializing':
       return 'init';
+    case 'needs_account_action':
+      return 'choose account';
+    case 'ready_to_resume':
+      return 'ready to resume';
     case 'completed':
     case 'idle':
       return 'idle';

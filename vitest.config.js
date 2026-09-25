@@ -15,6 +15,7 @@ export default defineConfig({
       'e2e/**',
     ],
     environment: 'jsdom',
+    setupFiles: ['./ui/test-setup.ts'],
   },
   define: {
     'import.meta.env.VITE_MOCK': '"true"',

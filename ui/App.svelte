@@ -51,6 +51,9 @@
     onSessionStderr,
     onSessionGitUpdate,
     onSessionSubagentCreated,
+    onSessionAccountActionRequired,
+    onSessionAccountChanged,
+    onSessionHandoffFailed,
     getAppVersion,
     getChangelog,
   } from './lib/tauri';
@@ -66,10 +69,16 @@
   import WorkspaceContainer from './components/workspace/WorkspaceContainer.svelte';
   import NewSessionModal from './components/NewSessionModal.svelte';
   import MetaPanel from './components/MetaPanel.svelte';
+  import UsageCenter from './components/UsageCenter.svelte';
+  import AccountHandoffDialog from './components/AccountHandoffDialog.svelte';
+  import SettingsModal from './components/SettingsModal.svelte';
+  import { providerAccounts, refreshProviderAccounts } from './lib/stores/providerAccounts';
+  import { onProviderAccountReady, onProviderAccountUpdated } from './lib/tauri/accounts';
   import { metaPanelVisible, sidebarVisible } from './lib/stores/preferences';
   import { sidebarToggleHint } from './lib/shortcuts';
   import { mutedSessions } from './lib/stores/ui';
   import { backends } from './lib/stores/providers';
+  import { usageCenterOpen, initUsageListeners } from './lib/stores/usage';
 
   let prevStatuses: Record<number, string> = {};
   let audioCtx: AudioContext | null = null;
@@ -82,6 +91,12 @@
   let pendingUpdate: UpdateInfo | null = null;
   let updateToastId: string | null = null;
   let showMobileBetaModal = false;
+  let handoffSessionId: number | null = null;
+  let showSettingsModal = false;
+  $: handoffSession =
+    handoffSessionId === null
+      ? null
+      : ($sessions.find((session) => session.id === handoffSessionId) ?? null);
   const stderrLastToast = new Map<number, number>();
   const taskNotifyAt = new Map<number, number>();
 
@@ -148,7 +163,9 @@
       }
     }
     sessions.set(existing);
+    refreshProviderAccounts().catch(() => {});
     restoreWorkspace(new Set(existing.map((s) => s.id)));
+    initUsageListeners();
     if (existing.length > 0 && !$selectedSessionId) {
       const ws = get(workspace);
       if (ws.focusedPaneId) assignSession(ws.focusedPaneId, existing[0].id);
@@ -346,6 +363,54 @@
       );
     });
 
+    const u15 = onSessionAccountActionRequired((sessionId) => {
+      sessions.update((list) =>
+        updateSessionState(list, sessionId, { status: 'needs_account_action' })
+      );
+      handoffSessionId = sessionId;
+      void notifyDesktop({
+        sessionId,
+        title: 'Orbit — account needs action',
+        body: `${sessionDisplayName(sessionId)} reached its current usage limit`,
+      });
+    });
+
+    const u16 = onSessionAccountChanged(({ sessionId, providerAccountId }) => {
+      sessions.update((list) =>
+        updateSessionState(list, sessionId, { providerAccountId, status: 'running' })
+      );
+      handoffSessionId = null;
+      void refreshProviderAccounts();
+    });
+
+    const u17 = onSessionHandoffFailed(({ sessionId, error }) => {
+      sessions.update((list) =>
+        updateSessionState(list, sessionId, { status: 'needs_account_action' })
+      );
+      handoffSessionId = sessionId;
+      addToast({ type: 'error', message: `Account handoff failed: ${error}`, autoDismiss: false });
+    });
+
+    const u18 = onProviderAccountUpdated(({ accountId, status }) => {
+      const label = get(providerAccounts)[accountId]?.label || 'Codex account';
+      void refreshProviderAccounts().catch(() => {});
+      if (['near_limit', 'quota_exceeded', 'auth_expired'].includes(status)) {
+        const affectedSessions = get(sessions).filter(
+          (session) =>
+            session.providerAccountId === accountId &&
+            ['running', 'waiting', 'needs_account_action'].includes(session.status)
+        ).length;
+        void notifyDesktop({
+          title: 'Orbit — account status changed',
+          body: `${label}: ${status}. ${affectedSessions} sessions use this profile.`,
+        });
+      }
+    });
+
+    const u19 = onProviderAccountReady(() => {
+      void listSessions().then((currentSessions) => sessions.set(currentSessions));
+    });
+
     // Opt-in: stream daemon SDK events straight into the feed when a daemon URL
     // is configured. Events route to a session via the run registry, populated
     // when a session opens a daemon run (see daemon-session.ts).
@@ -356,7 +421,27 @@
     }
 
     // Resolve all unlisten functions and store for cleanup
-    Promise.all([u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14]).then((fns) => {
+    Promise.all([
+      u1,
+      u2,
+      u3,
+      u4,
+      u5,
+      u6,
+      u7,
+      u8,
+      u9,
+      u10,
+      u11,
+      u12,
+      u13,
+      u14,
+      u15,
+      u16,
+      u17,
+      u18,
+      u19,
+    ]).then((fns) => {
       unlisteners = fns;
       if (uTrayNotify) unlisteners.push(uTrayNotify);
       if (disposeDaemon) unlisteners.push(disposeDaemon);
@@ -390,12 +475,14 @@
     updateInterval = setInterval(tryCheckUpdate, 30 * 60 * 1000);
 
     window.addEventListener('orbit:new-session', handleOrbitNewSession);
+    window.addEventListener('orbit:account-handoff', handleOrbitAccountHandoff);
   });
 
   onDestroy(() => {
     unlisteners.forEach((fn) => fn());
     if (updateInterval) clearInterval(updateInterval);
     window.removeEventListener('orbit:new-session', handleOrbitNewSession);
+    window.removeEventListener('orbit:account-handoff', handleOrbitAccountHandoff);
   });
 
   // Derive selected session from workspace focused pane
@@ -411,6 +498,16 @@
   })();
 
   let showNewSessionModal = false;
+
+  /** Open the manual handoff dialog for a paused session selected from the agent list.
+   * @param event The session selection event from an agent card.
+   * @return No value.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-25
+   */
+  function handleOrbitAccountHandoff(event: Event): void {
+    handoffSessionId = (event as CustomEvent<{ sessionId: number }>).detail.sessionId;
+  }
 
   function handleOrbitNewSession() {
     showNewSessionModal = true;
@@ -467,6 +564,14 @@
     />
   {/if}
 
+  {#if showSettingsModal}
+    <SettingsModal on:close={() => (showSettingsModal = false)} />
+  {/if}
+
+  {#if handoffSession}
+    <AccountHandoffDialog session={handoffSession} onClose={() => (handoffSessionId = null)} />
+  {/if}
+
   {#if isMobile && showMobileBetaModal}
     <Modal
       title="Mobile Beta"
@@ -510,10 +615,13 @@
           on:click={() => sidebarVisible.set(false)}
           aria-label="Close sidebar"
         ></button>
-        <Sidebar onOpenChangelog={openChangelog} />
+        <Sidebar
+          onOpenChangelog={openChangelog}
+          onOpenSettings={() => (showSettingsModal = true)}
+        />
       {/if}
     {:else if $sidebarVisible}
-      <Sidebar onOpenChangelog={openChangelog} />
+      <Sidebar onOpenChangelog={openChangelog} onOpenSettings={() => (showSettingsModal = true)} />
     {:else}
       <button
         class="sidebar-reopen"
@@ -540,6 +648,10 @@
       <MetaPanel session={selected} />
     {/if}
   </div>
+{/if}
+
+{#if $usageCenterOpen}
+  <UsageCenter onClose={() => usageCenterOpen.set(false)} />
 {/if}
 
 <ToastContainer />

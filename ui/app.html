@@ -5,6 +5,36 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Orbit</title>
+    <script>
+      window.__orbit_early_errors = [];
+      window.addEventListener('error', function (e) {
+        window.__orbit_early_errors.push(e);
+        var errBox = document.getElementById('orbit-early-error-box');
+        if (!errBox) {
+          errBox = document.createElement('div');
+          errBox.id = 'orbit-early-error-box';
+          errBox.style.cssText =
+            'position:fixed;top:10px;left:10px;right:10px;background:#1a0f0f;color:#ff8080;border:2px solid #ff4444;padding:16px;font-family:monospace;font-size:12px;z-index:999999;border-radius:6px;box-shadow:0 8px 32px rgba(0,0,0,0.8);white-space:pre-wrap;max-height:80vh;overflow:auto;';
+          document.documentElement.appendChild(errBox);
+        }
+        var msg = '⚠️ [Early Runtime Error]\n' + (e.message || e.error || 'Unknown Error') + '\nFile: ' + (e.filename || '') + ':' + (e.lineno || '') + ':' + (e.colno || '') + '\n\n' + (e.error && e.error.stack ? e.error.stack : '');
+        errBox.textContent = msg;
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        window.__orbit_early_errors.push(e);
+        var errBox = document.getElementById('orbit-early-error-box');
+        if (!errBox) {
+          errBox = document.createElement('div');
+          errBox.id = 'orbit-early-error-box';
+          errBox.style.cssText =
+            'position:fixed;top:10px;left:10px;right:10px;background:#1a0f0f;color:#ff8080;border:2px solid #ff4444;padding:16px;font-family:monospace;font-size:12px;z-index:999999;border-radius:6px;box-shadow:0 8px 32px rgba(0,0,0,0.8);white-space:pre-wrap;max-height:80vh;overflow:auto;';
+          document.documentElement.appendChild(errBox);
+        }
+        var reason = e.reason || {};
+        var msg = '⚠️ [Early Unhandled Rejection]\n' + (reason.message || String(reason)) + '\n\n' + (reason.stack || '');
+        errBox.textContent = msg;
+      });
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

@@ -226,7 +226,7 @@ async fn create_session(
     let app = state.app.clone();
     let prompt = body.prompt.clone();
     std::thread::spawn(move || {
-        SessionManager::do_spawn(manager, app, session_id, prompt, &reg);
+        SessionManager::do_spawn(manager, app, session_id, prompt, reg);
     });
 
     Ok(Json(json!({

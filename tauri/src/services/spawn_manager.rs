@@ -295,6 +295,7 @@ pub struct CodexConfig {
     /// Codex session (thread) ID for follow-ups
     pub codex_session_id: Option<String>,
     pub skip_permissions: bool,
+    pub account_home: Option<PathBuf>,
 }
 
 pub(crate) fn codex_model_args(model: &str) -> Option<[String; 2]> {
@@ -438,7 +439,13 @@ pub fn spawn_opencode(config: OpenCodeConfig) -> Result<SpawnHandle, String> {
     })
 }
 
-/// Spawn codex in non-interactive JSON mode.
+/// Spawn Codex in JSON mode under the session's isolated credential home.
+///
+/// @param config Provider process, account home and session prompt settings.
+/// @return Child process handles used by the session manager.
+/// @throws String If the CLI is unavailable or the child cannot start.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-25
 pub fn spawn_codex(config: CodexConfig) -> Result<SpawnHandle, String> {
     let codex = find_codex()
         .ok_or_else(|| "codex not found — install with: npm i -g @openai/codex".to_string())?;
@@ -446,6 +453,9 @@ pub fn spawn_codex(config: CodexConfig) -> Result<SpawnHandle, String> {
     let prompt = config.prompt.clone();
     let use_stdin = prompt_requires_stdin(&prompt);
     let mut cmd = crate::services::process_util::command_for_program(&codex);
+    if config.account_home.is_some() {
+        cmd.arg("-c").arg("cli_auth_credentials_store=\"file\"");
+    }
 
     if let Some(ref sid) = config.codex_session_id {
         cmd.args(["exec", "resume", "--json"]);
@@ -484,6 +494,13 @@ pub fn spawn_codex(config: CodexConfig) -> Result<SpawnHandle, String> {
 
     cmd.current_dir(&config.cwd);
     cmd.env("PATH", extended_path());
+    if let Some(ref account_home) = config.account_home {
+        cmd.env("CODEX_HOME", account_home);
+        cmd.env_remove("OPENAI_API_KEY");
+        cmd.env_remove("CODEX_ACCESS_TOKEN");
+        cmd.env_remove("OPENAI_FEDERATION_RULE_ID");
+        cmd.env_remove("OPENAI_IDENTITY_TOKEN_FILE");
+    }
     if use_stdin {
         cmd.stdin(std::process::Stdio::piped());
     } else {

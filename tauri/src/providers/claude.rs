@@ -130,7 +130,7 @@ impl Provider for ClaudeProvider {
         true
     }
     fn effort_levels(&self, model: &str) -> &[&str] {
-        if model.contains("opus-4-7") {
+        if model.contains("opus-4-7") || model == "opus" {
             &["low", "medium", "high", "xhigh", "max", "auto"]
         } else {
             &["low", "medium", "high", "max"]

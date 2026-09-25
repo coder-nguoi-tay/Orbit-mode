@@ -20,13 +20,23 @@ impl AgentStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    #[serde(default)]
+    pub reasoning: u64,
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub context_tokens: Option<u64>,
+    #[serde(default)]
+    pub context_limit: Option<u64>,
+    #[serde(default)]
+    pub estimated_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +55,199 @@ pub struct SubagentInfo {
     pub agent_type: String,
     pub description: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWindow {
+    pub utilization: f64,
+    pub resets_at: Option<i64>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderQuota {
+    pub provider: String,
+    pub account_key: String,
+    #[serde(default)]
+    pub provider_account_id: Option<String>,
+    pub five_hour: Option<QuotaWindow>,
+    pub seven_day: Option<QuotaWindow>,
+    pub updated_at: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountAuthType {
+    #[serde(rename = "chat_gpt_authenticated")]
+    ChatGPTAuthenticated,
+    ApiKey,
+    ManagedWorkspace,
+}
+
+impl AccountAuthType {
+    /// Return the stable database value for an account authentication method.
+    ///
+    /// @return A non-sensitive authentication type identifier.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-25
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ChatGPTAuthenticated => "chat_gpt_authenticated",
+            Self::ApiKey => "api_key",
+            Self::ManagedWorkspace => "managed_workspace",
+        }
+    }
+
+    /// Read a supported account authentication method from persisted metadata.
+    ///
+    /// @param value The database authentication type.
+    /// @return The corresponding authentication method, if supported.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-25
+    pub fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "chat_gpt_authenticated" => Some(Self::ChatGPTAuthenticated),
+            "api_key" => Some(Self::ApiKey),
+            "managed_workspace" => Some(Self::ManagedWorkspace),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStatus {
+    Available,
+    Busy,
+    NearLimit,
+    QuotaExceeded,
+    AuthExpired,
+    NeedsLogin,
+    Unavailable,
+    Unknown,
+}
+
+impl AccountStatus {
+    /// Return the stable database value for an account availability state.
+    ///
+    /// @return The non-sensitive status identifier.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-25
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Busy => "busy",
+            Self::NearLimit => "near_limit",
+            Self::QuotaExceeded => "quota_exceeded",
+            Self::AuthExpired => "auth_expired",
+            Self::NeedsLogin => "needs_login",
+            Self::Unavailable => "unavailable",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Read a persisted account state without assuming an unknown value is available.
+    ///
+    /// @param value The database status.
+    /// @return The recognized status, or Unknown.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-25
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "available" => Self::Available,
+            "busy" => Self::Busy,
+            "near_limit" => Self::NearLimit,
+            "quota_exceeded" => Self::QuotaExceeded,
+            "auth_expired" => Self::AuthExpired,
+            "needs_login" => Self::NeedsLogin,
+            "unavailable" => Self::Unavailable,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAccount {
+    pub id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub auth_type: AccountAuthType,
+    pub status: AccountStatus,
+    pub execution_scope: String,
+    #[serde(skip_serializing)]
+    pub profile_home: Option<String>,
+    pub is_default: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAccountEvent {
+    pub account_id: String,
+    pub label: String,
+    pub event: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsageSnapshot {
+    pub id: i64,
+    pub session_id: i64,
+    pub session_name: Option<String>,
+    pub project_name: Option<String>,
+    pub provider: String,
+    pub provider_account_id: Option<String>,
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
+    pub context_tokens: Option<u64>,
+    pub context_limit: Option<u64>,
+    pub context_percent: Option<f64>,
+    pub estimated_cost_usd: Option<f64>,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUsageSummary {
+    pub project_name: String,
+    pub total_tokens: u64,
+    pub estimated_cost_usd: f64,
+    pub agent_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsageSummary {
+    pub model: String,
+    pub provider: String,
+    pub total_tokens: u64,
+    pub estimated_cost_usd: f64,
+    pub session_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageOverview {
+    pub total_tokens_today: u64,
+    pub total_cost_today: f64,
+    pub active_agents_count: usize,
+    pub total_sessions_count: usize,
+    pub quotas: Vec<ProviderQuota>,
+    pub project_summaries: Vec<ProjectUsageSummary>,
+    pub model_summaries: Vec<ModelUsageSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +410,10 @@ pub struct TaskItem {
 /// Map raw model IDs to human-friendly display names.
 pub fn model_display_name(model_id: &str) -> &str {
     match model_id {
+        "default" => "Default",
+        "opus" => "Opus",
+        "sonnet" => "Sonnet",
+        "haiku" => "Haiku",
         "claude-opus-4-7" => "Opus 4.7",
         "claude-opus-4-7[1m]" => "Opus 4.7 (1M)",
         "claude-opus-4-6" => "Opus 4.6",
@@ -221,7 +428,11 @@ pub fn model_display_name(model_id: &str) -> &str {
 pub fn context_window(model_id: &str) -> u64 {
     match model_id {
         "claude-opus-4-7[1m]" | "claude-opus-4-6[1m]" => 1_000_000,
-        _ => 200_000,
+        "claude-sonnet-4-6"
+        | "claude-opus-4-7"
+        | "claude-opus-4-6"
+        | "claude-haiku-4-5-20251001" => 200_000,
+        _ => 0,
     }
 }
 
@@ -258,6 +469,20 @@ pub struct PtySize {
 mod tests {
     use super::*;
 
+    /// Ensure the ChatGPT auth type keeps the stable IPC/database spelling.
+    ///
+    /// @return No value; assertions cover both JSON directions.
+    /// @throws Panic If serde changes the public account contract.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_serialize_chatgpt_auth_type_with_stable_name() {
+        let encoded = serde_json::to_string(&AccountAuthType::ChatGPTAuthenticated).unwrap();
+        assert_eq!(encoded, "\"chat_gpt_authenticated\"");
+        let decoded: AccountAuthType = serde_json::from_str("\"chat_gpt_authenticated\"").unwrap();
+        assert_eq!(decoded, AccountAuthType::ChatGPTAuthenticated);
+    }
+
     #[test]
     fn should_construct_journal_entry_with_default() {
         let entry = JournalEntry {
@@ -282,6 +507,8 @@ pub enum SessionStatus {
     Completed,
     Stopped,
     Error,
+    NeedsAccountAction,
+    ReadyToResume,
 }
 
 impl SessionStatus {
@@ -293,6 +520,8 @@ impl SessionStatus {
             SessionStatus::Completed => "completed",
             SessionStatus::Stopped => "stopped",
             SessionStatus::Error => "error",
+            SessionStatus::NeedsAccountAction => "needs_account_action",
+            SessionStatus::ReadyToResume => "ready_to_resume",
         }
     }
 }
@@ -313,6 +542,8 @@ impl rusqlite::types::FromSql for SessionStatus {
             "completed" => SessionStatus::Completed,
             "stopped" => SessionStatus::Stopped,
             "error" => SessionStatus::Error,
+            "needs_account_action" => SessionStatus::NeedsAccountAction,
+            "ready_to_resume" => SessionStatus::ReadyToResume,
             _ => {
                 return Err(rusqlite::types::FromSqlError::Other(
                     format!("unknown SessionStatus: {s}").into(),
@@ -349,6 +580,7 @@ pub struct Session {
     pub permission_mode: String,
     pub model: Option<String>,
     pub provider: String,
+    pub provider_account_id: Option<String>,
     pub pid: Option<i32>,
     pub created_at: String,
     pub updated_at: String,

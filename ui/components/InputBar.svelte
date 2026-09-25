@@ -43,28 +43,29 @@
 
   // Model aliases per backend
   // Display names shown in the picker; resolved to real IDs before sending
-  const CLAUDE_MODELS = ['Opus 4.7', 'Opus 4.7 (1M)', 'Opus 4.6', 'Sonnet 4.6', 'Haiku 4.5'];
   const CLAUDE_MODEL_ALIASES: Record<string, string> = {
-    // Versioned short aliases (also accepted if user types them)
+    Default: 'default',
+    Opus: 'opus',
+    Sonnet: 'sonnet',
+    Haiku: 'haiku',
+    default: 'default',
+    opus: 'opus',
+    sonnet: 'sonnet',
+    haiku: 'haiku',
     'opus-4.7': 'claude-opus-4-7',
     'opus-4.7-1m': 'claude-opus-4-7[1m]',
     'opus-4.6': 'claude-opus-4-6',
     'sonnet-4.6': 'claude-sonnet-4-6',
     'haiku-4.5': 'claude-haiku-4-5-20251001',
-    // Display-name aliases (shown in picker)
     'Opus 4.7': 'claude-opus-4-7',
     'Opus 4.7 (1M)': 'claude-opus-4-7[1m]',
     'Opus 4.6': 'claude-opus-4-6',
     'Sonnet 4.6': 'claude-sonnet-4-6',
     'Haiku 4.5': 'claude-haiku-4-5-20251001',
   };
-  const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'];
+
   $: MODEL_OPTIONS =
-    provider === 'claude-code'
-      ? CLAUDE_MODELS
-      : provider === 'codex'
-        ? CODEX_MODELS
-        : providerModels;
+    provider === 'claude-code' ? ['Default', 'Opus', 'Sonnet', 'Haiku'] : providerModels;
 
   // Effort levels from provider (model-aware) — falls back to global default
   $: currentModel = $sessions.find((s) => s.id === sessionId)?.model ?? 'auto';
@@ -74,10 +75,8 @@
   // Orbit-native commands — provider-aware
   $: modelHint =
     provider === 'claude-code'
-      ? 'Switch model (opus, sonnet, haiku)'
-      : provider === 'codex'
-        ? 'Switch model (gpt-5.5, gpt-5.4, ...)'
-        : 'Switch model (type model ID)';
+      ? 'Switch model (opus, sonnet, haiku, default)'
+      : 'Switch model (type model ID)';
 
   $: effectiveCommands = (() => {
     const cmds: SlashCommand[] = [{ cmd: '/model', desc: modelHint, category: 'orbit' }];

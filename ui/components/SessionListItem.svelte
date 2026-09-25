@@ -8,6 +8,9 @@
   import { assignSession } from '../lib/stores/workspace';
   import { get } from 'svelte/store';
   import { clearAttention } from '../lib/tauri/attention';
+  import { formatTokens, getContextStatus } from '../lib/cost';
+  import { sessionUsages } from '../lib/stores/usage';
+  import { providerAccounts } from '../lib/stores/providerAccounts';
 
   export let session: Session;
   export let depth = 0;
@@ -27,13 +30,34 @@
   $: branchLabel = session.branchName ?? session.gitBranch ?? null;
   $: isMcpChild = (session.depth ?? 0) > 0 || session.parentSessionId != null;
   $: dotColor = sessionStatusDotColor(session.status, session.attention);
+  $: accountLabel = session.providerAccountId
+    ? $providerAccounts[session.providerAccountId]?.label
+    : null;
 
-  function openSession(s: Session, expandIfParent: boolean) {
+  $: usageSnapshot = $sessionUsages.get(session.id);
+  $: totalTokens =
+    usageSnapshot?.totalTokens ?? (session.tokens?.input ?? 0) + (session.tokens?.output ?? 0);
+  $: ctxPercent = usageSnapshot?.contextPercent ?? session.contextPercent ?? 0;
+  $: ctxStatus = getContextStatus(ctxPercent);
+
+  /** Open a session and offer manual handoff when its account needs action.
+   * @param s The selected Orbit session.
+   * @param expandIfParent Whether to expand child sessions.
+   * @return No value.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-25
+   */
+  function openSession(s: Session, expandIfParent: boolean): void {
     const ws = get(workspace);
     if (ws.focusedPaneId) assignSession(ws.focusedPaneId, s.id);
     if (s.attention?.requiresAttention) clearAttention(s.id);
     if (expandIfParent && getChildren($sessions, s.id).length > 0) {
       onToggleExpand(s.id);
+    }
+    if (s.status === 'needs_account_action') {
+      window.dispatchEvent(
+        new CustomEvent('orbit:account-handoff', { detail: { sessionId: s.id } })
+      );
     }
   }
 </script>
@@ -69,12 +93,27 @@
   </span>
   <span class="session-subline">
     <span>{fmtModel(session.model)}</span>
+    {#if accountLabel}<span title="Provider account">{accountLabel}</span>{/if}
+    {#if session.status === 'needs_account_action'}<span>⚠ choose account</span>{/if}
+    {#if session.status === 'ready_to_resume'}<span>● ready to resume</span>{/if}
     {#if isMcpChild}<span class="mcp-badge" title="MCP child session">mcp</span>{/if}
     {#if branchLabel}<span>{branchLabel}</span>{/if}
     {#if session.gitDirty}<span class="git-dirty" title="Uncommitted changes">●</span>{/if}
-    {#if (session.contextPercent ?? 0) > 0}<span
-        >{Math.round(session.contextPercent ?? 0)}% ctx</span
-      >{/if}
+    {#if totalTokens > 0}
+      <span class="tokens-badge" title="{totalTokens.toLocaleString()} tokens"
+        >{formatTokens(totalTokens)}</span
+      >
+    {/if}
+    {#if ctxPercent > 0}
+      <span
+        class="ctx-badge ctx-{ctxStatus}"
+        title={usageSnapshot?.contextTokens
+          ? `${usageSnapshot.contextTokens.toLocaleString()} / ${usageSnapshot.contextLimit?.toLocaleString()} (${ctxPercent.toFixed(1)}%)`
+          : `${ctxPercent.toFixed(1)}% context`}
+      >
+        {Math.round(ctxPercent)}% ctx
+      </span>
+    {/if}
   </span>
 </button>
 
@@ -175,5 +214,29 @@
     color: var(--ac);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+  }
+  .tokens-badge {
+    color: var(--t2);
+  }
+  .ctx-badge {
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+  }
+  .ctx-badge.ctx-normal {
+    color: var(--t2);
+  }
+  .ctx-badge.ctx-warning {
+    color: #e5a544;
+    background: rgba(229, 165, 68, 0.12);
+  }
+  .ctx-badge.ctx-high {
+    color: #f07b3f;
+    background: rgba(240, 123, 63, 0.15);
+  }
+  .ctx-badge.ctx-critical {
+    color: #f04848;
+    background: rgba(240, 72, 72, 0.18);
+    font-weight: 600;
   }
 </style>

@@ -15,6 +15,8 @@ pub struct ProviderSpawnConfig {
     pub prompt: String,
     pub resume_id: Option<String>,
     pub extra_env: Vec<(String, String)>,
+    /// Isolated local credential home for the selected provider account.
+    pub account_home: Option<std::path::PathBuf>,
     /// Effort level for thinking. Only used by providers that support it.
     pub effort: Option<String>,
     /// How to spawn: locally or via SSH tunnel.

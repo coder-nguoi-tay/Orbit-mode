@@ -8,3 +8,5 @@ export * from './http-api';
 export * from './git';
 export * from './window';
 export * from './diff';
+export * from './usage';
+export * from './accounts';

@@ -61,6 +61,7 @@ const {
 
 vi.mock('$lib/tauri/invoke', () => ({
   HAS_TAURI: false,
+  invoke: vi.fn(async () => []),
 }));
 
 vi.mock('$lib/tauri', () => ({
@@ -160,13 +161,17 @@ vi.mock('$lib/tauri/desktop', () => ({
   setDesktopNotificationsEnabled: vi.fn(),
 }));
 
-vi.mock('$lib/cost', () => ({
-  formatTokens: vi.fn((n: number) => {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
-    return String(n);
-  }),
-}));
+vi.mock('$lib/cost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/cost')>();
+  return {
+    ...actual,
+    formatTokens: vi.fn((n: number) => {
+      if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+      if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+      return String(n);
+    }),
+  };
+});
 
 vi.mock('$lib/tauri/providers', () => ({
   saveProviderKey: vi.fn(() => Promise.resolve()),

@@ -17,6 +17,8 @@
   import { sidebarVisible } from '../lib/stores/preferences';
   import { sidebarToggleHint } from '../lib/shortcuts';
   import { fly } from '../lib/motion';
+  import { Activity, Settings } from 'lucide-svelte';
+  import { usageCenterOpen } from '../lib/stores/usage';
 
   let appVersion = '';
   import OrbitLogo from '../lib/assets/orbit.svg?raw';
@@ -117,6 +119,7 @@
   }
 
   export let onOpenChangelog: () => void = () => {};
+  export let onOpenSettings: () => void = () => {};
 
   let showModal = false;
 
@@ -248,6 +251,22 @@
       {/if}
     </div>
     <div class="header-actions">
+      <button
+        class="usage-trigger-btn"
+        on:click={() => usageCenterOpen.set(true)}
+        title="Agent Usage Control Center"
+        aria-label="Agent Usage Control Center"
+      >
+        <Activity size={14} />
+      </button>
+      <button
+        class="usage-trigger-btn"
+        on:click={onOpenSettings}
+        title="Settings and AI accounts"
+        aria-label="Settings and AI accounts"
+      >
+        <Settings size={14} />
+      </button>
       <McpStatusBadge compact />
       <ThemePicker />
       <button
@@ -396,6 +415,24 @@
     display: flex;
     align-items: center;
     gap: var(--sp-3);
+  }
+  .usage-trigger-btn {
+    background: none;
+    border: none;
+    color: var(--t2);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    transition:
+      color 0.15s,
+      background 0.15s;
+  }
+  .usage-trigger-btn:hover {
+    color: var(--ac);
+    background: var(--bg2);
   }
   .collapse-btn {
     background: none;
