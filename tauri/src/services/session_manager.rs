@@ -1934,7 +1934,13 @@ impl SessionManager {
             .unwrap_or_default()
     }
 
-    /// Load journal state for `session_id` from DB into `journal_states` if not already present.
+    /// Load journal state for `session_id` and restore persisted provider quota samples.
+    ///
+    /// @param session_id Session whose stored JSONL output is replayed.
+    /// @return No value; the in-memory journal and quota snapshot store are updated.
+    /// @throws No direct error; unavailable history is ignored to preserve startup behavior.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
     fn load_session_journal(&mut self, session_id: SessionId) {
         if self.journal_states.contains_key(&session_id) {
             return;
@@ -1967,6 +1973,46 @@ impl SessionManager {
         for line in &rows {
             line_processor(&mut state, line);
         }
+
+        if matches!(provider_owned.as_str(), "codex" | "claude-code" | "claude")
+            && !state.rate_limit.is_empty()
+        {
+            let provider_account_id = self
+                .db
+                .get_session(session_id)
+                .ok()
+                .flatten()
+                .and_then(|session| session.provider_account_id);
+            let quota = crate::models::ProviderQuota {
+                provider: provider_owned.clone(),
+                account_key: provider_account_id
+                    .clone()
+                    .unwrap_or_else(|| "default".into()),
+                provider_account_id,
+                five_hour: state
+                    .rate_limit
+                    .iter()
+                    .find(|limit| limit.rate_limit_type == "five_hour")
+                    .map(|limit| crate::models::QuotaWindow {
+                        utilization: limit.utilization,
+                        resets_at: limit.resets_at,
+                        status: Some(limit.status.clone()),
+                    }),
+                seven_day: state
+                    .rate_limit
+                    .iter()
+                    .find(|limit| limit.rate_limit_type == "seven_day")
+                    .map(|limit| crate::models::QuotaWindow {
+                        utilization: limit.utilization,
+                        resets_at: limit.resets_at,
+                        status: Some(limit.status.clone()),
+                    }),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+                source: "journal_replay".into(),
+            };
+            let _ = self.db.record_provider_quota(&quota);
+        }
+
         self.journal_states.insert(session_id, state);
     }
 
@@ -2194,9 +2240,11 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Eagerly load journal state for all sessions from DB.
-    /// Not called at startup (journals load lazily on first access).
-    /// Available as a utility for warming the cache or in tests.
+    /// Reload persisted journals and publish the current quota state of active CLI agents.
+    ///
+    /// @return No value; journal caches and provider quota snapshots are refreshed.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
     pub fn restore_from_db(&mut self) {
         let session_ids: Vec<SessionId> = self
             .db
@@ -2207,6 +2255,54 @@ impl SessionManager {
             .collect();
         for id in session_ids {
             self.load_session_journal(id);
+        }
+
+        let active_quotas: Vec<crate::models::ProviderQuota> = self
+            .active
+            .iter()
+            .filter_map(|(session_id, active_session)| {
+                let provider = active_session.session.provider.as_str();
+                if !matches!(provider, "codex" | "claude-code" | "claude") {
+                    return None;
+                }
+                let state = self.journal_states.get(session_id)?;
+                if state.rate_limit.is_empty() {
+                    return None;
+                }
+
+                let provider_account_id = active_session.session.provider_account_id.clone();
+                Some(crate::models::ProviderQuota {
+                    provider: provider.to_string(),
+                    account_key: provider_account_id
+                        .clone()
+                        .unwrap_or_else(|| "default".into()),
+                    provider_account_id,
+                    five_hour: state
+                        .rate_limit
+                        .iter()
+                        .find(|limit| limit.rate_limit_type == "five_hour")
+                        .map(|limit| crate::models::QuotaWindow {
+                            utilization: limit.utilization,
+                            resets_at: limit.resets_at,
+                            status: Some(limit.status.clone()),
+                        }),
+                    seven_day: state
+                        .rate_limit
+                        .iter()
+                        .find(|limit| limit.rate_limit_type == "seven_day")
+                        .map(|limit| crate::models::QuotaWindow {
+                            utilization: limit.utilization,
+                            resets_at: limit.resets_at,
+                            status: Some(limit.status.clone()),
+                        }),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                    source: "active_cli".into(),
+                })
+            })
+            .collect();
+
+        for quota in active_quotas {
+            let _ = self.db.record_provider_quota(&quota);
         }
     }
 }
@@ -2613,6 +2709,118 @@ mod tests {
             journal[0].entry_type,
             crate::models::JournalEntryType::Assistant,
         );
+    }
+
+    /// Restore Claude subscription quota windows from persisted JSONL output.
+    ///
+    /// @return No value; assertions verify the Claude quota snapshot is rebuilt.
+    /// @throws Panic If the stored Claude rate-limit event is not restored.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_restore_claude_quota_windows_from_stored_outputs() {
+        let db = make_db();
+        let sid = db
+            .create_session(
+                None,
+                None,
+                "/tmp",
+                "ignore",
+                None,
+                Some("claude-code"),
+                None,
+                None,
+            )
+            .expect("session");
+        let claude_line = serde_json::json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "allowed",
+                "rateLimitType": "five_hour",
+                "unifiedWindows": {
+                    "five_hour": { "utilization": 0.27, "resetsAt": 1790359800i64 },
+                    "seven_day": { "utilization": 0.35, "resetsAt": 1790845200i64 }
+                }
+            }
+        });
+        seed_outputs(&db, sid, &[&claude_line.to_string()]);
+
+        let mut sm = SessionManager::new(Arc::clone(&db));
+        sm.restore_from_db();
+
+        let quotas = db
+            .get_latest_provider_quotas()
+            .expect("quota snapshot query should succeed");
+        let quota = quotas
+            .iter()
+            .find(|quota| quota.provider == "claude-code")
+            .expect("missing restored Claude quota");
+        assert_eq!(
+            quota.five_hour.as_ref().map(|window| window.utilization),
+            Some(0.27)
+        );
+        assert_eq!(
+            quota.seven_day.as_ref().map(|window| window.utilization),
+            Some(0.35)
+        );
+    }
+
+    /// Prefer the current active Claude CLI quota over an older persisted snapshot.
+    ///
+    /// @return No value; assertions verify the active CLI sample wins on refresh.
+    /// @throws Panic If the active Claude quota does not replace the old snapshot.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_prefer_active_claude_quota_over_replayed_snapshot() {
+        let db = make_db();
+        db.record_provider_quota(&crate::models::ProviderQuota {
+            provider: "claude-code".into(),
+            account_key: "default".into(),
+            provider_account_id: None,
+            five_hour: Some(crate::models::QuotaWindow {
+                utilization: 0.11,
+                resets_at: Some(1790359800),
+                status: Some("allowed".into()),
+            }),
+            seven_day: None,
+            updated_at: "2026-09-25T00:00:00Z".into(),
+            source: "journal_replay".into(),
+        })
+        .expect("old quota snapshot should be stored");
+
+        let mut sm = SessionManager::new(Arc::clone(&db));
+        let session = sm
+            .init_session("/tmp", None, "ignore", None, false, None, None, None, None)
+            .expect("active session should be created");
+        sm.journal_states.insert(
+            session.id,
+            JournalState {
+                rate_limit: vec![crate::models::RateLimitInfo {
+                    status: "allowed".into(),
+                    rate_limit_type: "five_hour".into(),
+                    utilization: 0.44,
+                    resets_at: Some(1790375400),
+                    is_using_overage: false,
+                    surpassed_threshold: 0.0,
+                }],
+                ..JournalState::default()
+            },
+        );
+
+        sm.restore_from_db();
+
+        let quota = db
+            .get_latest_provider_quotas()
+            .expect("quota snapshot query should succeed")
+            .into_iter()
+            .find(|quota| quota.provider == "claude-code")
+            .expect("missing active Claude quota");
+        assert_eq!(
+            quota.five_hour.as_ref().map(|window| window.utilization),
+            Some(0.44)
+        );
+        assert_eq!(quota.source, "active_cli");
     }
 
     #[test]

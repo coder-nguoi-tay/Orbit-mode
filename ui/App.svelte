@@ -56,6 +56,7 @@
     onSessionHandoffFailed,
     getAppVersion,
     getChangelog,
+    listPipelines,
   } from './lib/tauri';
   import { listen } from './lib/tauri/invoke';
   import type { ClaudeCheck } from './lib/tauri';
@@ -79,6 +80,15 @@
   import { mutedSessions } from './lib/stores/ui';
   import { backends } from './lib/stores/providers';
   import { usageCenterOpen, initUsageListeners } from './lib/stores/usage';
+  import {
+    activePipeline,
+    activePipelineId,
+    pipelines,
+    upsertPipeline,
+    updatePipelineStatus,
+  } from './lib/stores/pipelines';
+  import PipelinePanel from './components/PipelinePanel.svelte';
+  import type { Pipeline, PipelineStatus, PipelineStep } from './lib/types';
 
   let prevStatuses: Record<number, string> = {};
   let audioCtx: AudioContext | null = null;
@@ -164,6 +174,9 @@
     }
     sessions.set(existing);
     refreshProviderAccounts().catch(() => {});
+    listPipelines()
+      .then((pl) => pipelines.set(pl))
+      .catch(() => {});
     restoreWorkspace(new Set(existing.map((s) => s.id)));
     initUsageListeners();
     if (existing.length > 0 && !$selectedSessionId) {
@@ -411,6 +424,26 @@
       void listSessions().then((currentSessions) => sessions.set(currentSessions));
     });
 
+    // Pipeline events
+    const uPipelineCreated = listen<Pipeline>('pipeline:created', (e) => {
+      upsertPipeline(e.payload);
+    });
+    const uPipelineState = listen<{
+      pipelineId: number;
+      status: PipelineStatus;
+      steps?: PipelineStep[];
+    }>('pipeline:state', (e) => {
+      updatePipelineStatus(e.payload.pipelineId, e.payload.status, e.payload.steps);
+    });
+
+    const uPipelineCompleted = listen<{ pipelineId: number }>('pipeline:completed', (e) => {
+      addToast({
+        type: 'success',
+        message: `Pipeline #${e.payload.pipelineId} is ready for review`,
+        autoDismiss: true,
+      });
+    });
+
     // Opt-in: stream daemon SDK events straight into the feed when a daemon URL
     // is configured. Events route to a session via the run registry, populated
     // when a session opens a daemon run (see daemon-session.ts).
@@ -441,6 +474,9 @@
       u17,
       u18,
       u19,
+      uPipelineCreated,
+      uPipelineState,
+      uPipelineCompleted,
     ]).then((fns) => {
       unlisteners = fns;
       if (uTrayNotify) unlisteners.push(uTrayNotify);
@@ -626,8 +662,10 @@
       <button
         class="sidebar-reopen"
         on:click={() => sidebarVisible.set(true)}
-        title="Show sidebar ({sidebarToggleHint()})">›</button
+        title="Show sidebar ({sidebarToggleHint()})"
       >
+        ›
+      </button>
     {/if}
     {#if claudeCheck && !claudeCheck.found}
       <div class="empty">
@@ -641,10 +679,19 @@
           </div>
         </div>
       </div>
+    {:else if $activePipeline}
+      <PipelinePanel pipeline={$activePipeline} />
+      <button
+        class="pipeline-close"
+        on:click={() => activePipelineId.set(null)}
+        title="Close pipeline view"
+      >
+        ✕ sessions
+      </button>
     {:else}
       <WorkspaceContainer />
     {/if}
-    {#if selected && $metaPanelVisible}
+    {#if selected && $metaPanelVisible && !$activePipeline}
       <MetaPanel session={selected} />
     {/if}
   </div>
@@ -712,6 +759,26 @@
     align-items: center;
     justify-content: center;
     min-width: 0;
+  }
+
+  .pipeline-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: transparent;
+    border: 1px solid var(--bd);
+    border-radius: 5px;
+    color: var(--t2);
+    font-size: 11px;
+    font-family: var(--mono);
+    padding: 3px 8px;
+    cursor: pointer;
+    z-index: 10;
+    transition: all 0.15s;
+  }
+  .pipeline-close:hover {
+    border-color: var(--t1);
+    color: var(--t1);
   }
   .claude-warn {
     display: flex;

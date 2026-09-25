@@ -450,108 +450,110 @@
 
   .timeline {
     width: 100%;
-    padding: 28px 38px 22px;
+    padding: 16px 24px;
     display: flex;
     flex-direction: column;
-    gap: 13px;
+    gap: 14px;
+    font-family: var(--font-mono, var(--mono), monospace);
   }
 
   .timeline-event {
     display: grid;
-    grid-template-columns: 20px 1fr;
-    gap: 16px;
+    grid-template-columns: 14px 1fr;
+    gap: 8px;
     position: relative;
   }
   .timeline-event:not(:last-child)::before {
-    content: '';
-    position: absolute;
-    left: 9px;
-    top: 29px;
-    bottom: -14px;
-    width: 1px;
-    background: rgba(255, 255, 255, 0.07);
+    display: none;
   }
 
   .timeline-node {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    margin-top: 4px;
-    border: 1px solid var(--bd);
-    background: var(--bg);
+    width: 14px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 0;
+    border: none;
+    background: transparent;
   }
   .timeline-node::after {
-    content: '';
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--t3);
+    content: '›';
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t3);
+    background: transparent;
+    box-shadow: none;
   }
   .timeline-node.user::after {
-    background: var(--user-fg);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--user-fg), transparent 78%),
-      0 0 16px color-mix(in srgb, var(--user-fg), transparent 32%);
+    content: '>';
+    color: var(--t1);
+    font-size: 13px;
+    background: transparent;
+    box-shadow: none;
   }
   .timeline-node.assistant::after,
   .timeline-node.working::after {
-    background: var(--ac);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--ac), transparent 78%),
-      0 0 16px color-mix(in srgb, var(--ac), transparent 32%);
-  }
-  .timeline-node.user {
-    border-color: color-mix(in srgb, var(--user-fg), transparent 36%);
-    background: color-mix(in srgb, var(--user-fg), transparent 86%);
-  }
-  .timeline-node.assistant,
-  .timeline-node.working {
-    border-color: color-mix(in srgb, var(--ac), transparent 36%);
-    background: color-mix(in srgb, var(--ac), transparent 86%);
+    content: '•';
+    color: var(--ac);
+    font-size: 11px;
+    background: transparent;
+    box-shadow: none;
   }
   .timeline-node.tool::after {
-    background: var(--tool-fg);
-    box-shadow: 0 0 12px color-mix(in srgb, var(--tool-fg), transparent 70%);
+    content: '›';
+    color: var(--t3);
+    font-size: 12px;
+    background: transparent;
+    box-shadow: none;
   }
 
   .event-meta {
     display: flex;
     align-items: center;
-    gap: 9px;
-    margin-bottom: 5px;
+    gap: 8px;
+    margin-bottom: 2px;
     color: var(--t3);
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 11px;
   }
   .event-actor {
-    color: var(--t1);
+    font-weight: 600;
+    font-family: var(--mono);
+    color: var(--t2);
   }
   .event-actor.user {
-    color: var(--user-fg);
+    color: var(--t1);
   }
   .event-actor.assistant,
   .event-actor.working {
     color: var(--ac);
   }
   .event-ts {
-    font-size: var(--xs);
+    font-size: 10px;
     color: var(--t3);
+    opacity: 0.6;
   }
 
   .event-text {
     color: var(--t0);
     font-size: 13px;
-    line-height: 1.58;
+    line-height: 1.55;
   }
   .user-text {
-    max-width: 680px;
-    width: fit-content;
-    border: 1px solid var(--bd);
-    border-radius: 18px;
-    padding: 12px 14px;
-    background: color-mix(in srgb, var(--t0), transparent 95%);
+    max-width: 100%;
+    width: 100%;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--t0);
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   .system-text {
     color: var(--t1);

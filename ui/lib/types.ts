@@ -206,3 +206,92 @@ export interface GitSnapshot {
   statusOutput: string | null;
   error: string | null;
 }
+
+// ── Pipeline types ────────────────────────────────────────────────────────────
+
+export type PipelineStatus =
+  | 'created'
+  | 'preflight'
+  | 'planning'
+  | 'plan_ready'
+  | 'implementing'
+  | 'reviewing'
+  | 'changes_requested'
+  | 'testing'
+  | 'test_failed'
+  | 'final_review'
+  | 'quality_gate'
+  | 'ready_for_human'
+  | 'completed'
+  | 'paused'
+  | 'failed'
+  | 'cancelled';
+
+export type PipelineAgentRole = 'planner' | 'developer' | 'reviewer' | 'tester' | 'auditor';
+
+export type PipelineStepStatus =
+  | 'pending'
+  | 'starting'
+  | 'running'
+  | 'waiting'
+  | 'passed'
+  | 'failed'
+  | 'needs_changes'
+  | 'cancelled'
+  | 'skipped';
+
+export interface PipelineAgentConfig {
+  provider: string;
+  model: string;
+}
+
+export interface PipelineLimits {
+  maxPlanRevisions: number;
+  maxReviewLoops: number;
+  maxTestFixLoops: number;
+  maxTotalAgentRuns: number;
+}
+
+export interface PipelineConfig {
+  planner: PipelineAgentConfig;
+  developer: PipelineAgentConfig;
+  reviewer: PipelineAgentConfig;
+  tester: PipelineAgentConfig;
+  limits: PipelineLimits;
+  requireFinalReview: boolean;
+  requireTests: boolean;
+  qualityCommands: string[];
+}
+
+export interface PipelineStep {
+  id: number;
+  pipelineId: number;
+  role: PipelineAgentRole;
+  status: PipelineStepStatus;
+  providerId: string;
+  model: string | null;
+  attempt: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+  sessionId: number | null;
+}
+
+export interface Pipeline {
+  id: number;
+  projectId: number | null;
+  name: string;
+  userRequest: string;
+  worktreePath: string | null;
+  status: PipelineStatus;
+  config: PipelineConfig;
+  baselineGitHead: string | null;
+  reviewLoops: number;
+  testLoops: number;
+  planRevisions: number;
+  totalAgentRuns: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  steps: PipelineStep[];
+}

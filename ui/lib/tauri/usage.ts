@@ -9,6 +9,11 @@ export async function getProviderQuotas(): Promise<ProviderQuota[]> {
   return invoke<ProviderQuota[]>('get_provider_quotas');
 }
 
+/** Read live Codex quotas from the CLI instead of waiting for a session event. */
+export async function refreshCodexQuotas(): Promise<ProviderQuota[]> {
+  return invoke<ProviderQuota[]>('refresh_codex_quotas');
+}
+
 export async function getSessionUsages(
   sessionId?: number,
   limit?: number

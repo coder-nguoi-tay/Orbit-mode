@@ -220,10 +220,21 @@ pub fn get_changelog() -> String {
     include_str!("../../../CHANGELOG.md").to_string()
 }
 
+/// Build the usage overview after replaying persisted provider quota events.
+///
+/// @param state Session manager containing the database and journal cache.
+/// @return Aggregated usage totals, provider quotas and breakdowns.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 #[tauri::command]
 pub fn get_usage_overview(
-    db: tauri::State<crate::services::database::DatabaseService>,
+    state: tauri::State<crate::ipc::session::SessionState>,
 ) -> crate::models::UsageOverview {
+    let db = {
+        let mut session_manager = state.write();
+        session_manager.restore_from_db();
+        std::sync::Arc::clone(&session_manager.db)
+    };
     db.get_usage_overview()
         .unwrap_or(crate::models::UsageOverview {
             total_tokens_today: 0,
@@ -236,18 +247,101 @@ pub fn get_usage_overview(
         })
 }
 
+/// Return provider quotas after refreshing samples held by active CLI sessions.
+///
+/// @param state Session manager containing the active CLI state and database.
+/// @return Latest known provider quotas.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 #[tauri::command]
 pub fn get_provider_quotas(
-    db: tauri::State<crate::services::database::DatabaseService>,
+    state: tauri::State<crate::ipc::session::SessionState>,
 ) -> Vec<crate::models::ProviderQuota> {
+    let db = {
+        let mut session_manager = state.write();
+        session_manager.restore_from_db();
+        std::sync::Arc::clone(&session_manager.db)
+    };
     db.get_latest_provider_quotas().unwrap_or_default()
 }
 
 #[tauri::command]
 pub fn get_session_usages(
-    db: tauri::State<crate::services::database::DatabaseService>,
+    state: tauri::State<crate::ipc::session::SessionState>,
     limit: Option<usize>,
 ) -> Vec<crate::models::SessionUsageSnapshot> {
+    let db = std::sync::Arc::clone(&state.read().db);
     db.get_session_usages(limit.unwrap_or(50))
         .unwrap_or_default()
+}
+
+/// Read every configured Codex account's live quota straight from the CLI.
+///
+/// Quota samples otherwise only arrive once a session streams a `token_count` event, so
+/// this poll keeps the usage center accurate before any agent has run.
+///
+/// @param state The session manager holding the shared database.
+/// @param app Event emitter for `provider:quota-updated`.
+/// @return Freshly read quotas for the accounts that answered.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+/// Spawning the CLI blocks, so this must stay `async` + `spawn_blocking`: a synchronous
+/// command would stall Tauri's main thread and freeze the whole window while it waits.
+#[tauri::command]
+pub async fn refresh_codex_quotas(
+    state: tauri::State<'_, crate::ipc::session::SessionState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::models::ProviderQuota>, crate::ipc::IpcError> {
+    use tauri::Emitter;
+
+    let db = std::sync::Arc::clone(&state.read().db);
+
+    let quotas = tauri::async_runtime::spawn_blocking(move || {
+        let Some(executable) = crate::services::spawn_manager::find_codex() else {
+            return Vec::new();
+        };
+
+        // Accounts with an isolated home are read separately; otherwise read the system login.
+        let accounts: Vec<(String, Option<String>, Option<String>)> = db
+            .list_provider_accounts()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|account| account.provider_id == "codex")
+            .filter(|account| account.auth_type != crate::models::AccountAuthType::ApiKey)
+            .map(|account| (account.id.clone(), account.profile_home, Some(account.id)))
+            .collect();
+        let targets = if accounts.is_empty() {
+            vec![("default".to_string(), None, None)]
+        } else {
+            accounts
+        };
+
+        targets
+            .into_iter()
+            .filter_map(|(account_key, profile_home, account_id)| {
+                match crate::services::codex_quota::fetch_codex_quota(
+                    &executable,
+                    profile_home.as_deref(),
+                    &account_key,
+                    account_id.as_deref(),
+                ) {
+                    Ok(quota) => {
+                        let _ = db.record_provider_quota(&quota);
+                        Some(quota)
+                    }
+                    Err(error) => {
+                        eprintln!("[orbit:quota] codex read failed for {account_key}: {error}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| crate::ipc::IpcError::Other(format!("quota read task failed: {e}")))?;
+
+    for quota in &quotas {
+        let _ = app.emit("provider:quota-updated", quota);
+    }
+    Ok(quotas)
 }

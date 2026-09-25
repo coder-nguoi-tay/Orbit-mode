@@ -1,6 +1,7 @@
 pub mod error;
 pub mod http_api;
 pub mod mcp;
+pub mod pipeline;
 pub mod project;
 pub mod session;
 pub mod terminal;

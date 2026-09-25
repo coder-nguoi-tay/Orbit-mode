@@ -566,6 +566,8 @@ export function mockListen(event: string, cb: Listener) {
 let nextId = 4;
 let sessions = [...MOCK_SESSIONS];
 let journals: Record<number, JournalEntry[]> = { ...MOCK_JOURNAL };
+import type { Pipeline } from '../types';
+let mockPipelines: Pipeline[] = [];
 
 export async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   await delay(80); // realistic latency
@@ -1125,6 +1127,27 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         ],
       };
 
+    case 'refresh_codex_quotas':
+      return [
+        {
+          provider: 'codex',
+          accountKey: 'default',
+          providerAccountId: null,
+          fiveHour: {
+            utilization: 0.33,
+            resetsAt: Math.floor(Date.now() / 1000) + 2 * 3600,
+            status: 'normal',
+          },
+          sevenDay: {
+            utilization: 0.05,
+            resetsAt: Math.floor(Date.now() / 1000) + 6 * 24 * 3600,
+            status: 'normal',
+          },
+          updatedAt: new Date().toISOString(),
+          source: 'app_server',
+        },
+      ];
+
     case 'get_provider_quotas':
       return [
         {
@@ -1163,6 +1186,62 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
 
     case 'get_session_usages':
       return [];
+
+    case 'list_pipelines':
+      return mockPipelines;
+
+    case 'create_pipeline': {
+      const { name, userRequest, worktreePath, config } = args as {
+        name: string;
+        userRequest: string;
+        worktreePath: string;
+        config: Pipeline['config'];
+      };
+      const p: Pipeline = {
+        id: Date.now(),
+        projectId: null,
+        name,
+        userRequest,
+        worktreePath,
+        status: 'created',
+        config,
+        baselineGitHead: null,
+        reviewLoops: 0,
+        testLoops: 0,
+        planRevisions: 0,
+        totalAgentRuns: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        completedAt: null,
+        steps: [],
+      };
+      mockPipelines = [p, ...mockPipelines];
+      mockEmit('pipeline:created', p);
+      return p;
+    }
+
+    case 'get_pipeline': {
+      const { pipelineId } = args as { pipelineId: number };
+      return mockPipelines.find((p) => p.id === pipelineId) ?? null;
+    }
+
+    case 'cancel_pipeline': {
+      const { pipelineId } = args as { pipelineId: number };
+      mockPipelines = mockPipelines.map((p) =>
+        p.id === pipelineId ? { ...p, status: 'cancelled' as const } : p
+      );
+      const updated = mockPipelines.find((p) => p.id === pipelineId)!;
+      mockEmit('pipeline:state', { pipelineId, status: 'cancelled', steps: updated.steps });
+      return updated;
+    }
+
+    case 'set_pipeline_status': {
+      const { pipelineId, status } = args as { pipelineId: number; status: Pipeline['status'] };
+      mockPipelines = mockPipelines.map((p) => (p.id === pipelineId ? { ...p, status } : p));
+      const updated = mockPipelines.find((p) => p.id === pipelineId)!;
+      mockEmit('pipeline:state', { pipelineId, status, steps: updated.steps });
+      return updated;
+    }
 
     default:
       console.warn('[mock] Unhandled invoke:', cmd, args);

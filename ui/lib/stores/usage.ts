@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import type { ProviderQuota, SessionUsageSnapshot, UsageOverview } from '../types';
-import { getUsageOverview } from '../tauri/usage';
+import { getUsageOverview, refreshCodexQuotas } from '../tauri/usage';
 import { onSessionUsageUpdated, onProviderQuotaUpdated } from '../tauri/events';
 
 export const usageOverview = writable<UsageOverview | null>(null);
@@ -42,6 +42,28 @@ export function mergeAccountQuota(current: ProviderQuota, incoming: ProviderQuot
   };
 }
 
+/** Merge freshly read quotas into the store, keeping windows the read did not cover. */
+function applyQuotas(incoming: ProviderQuota[]) {
+  if (incoming.length === 0) return;
+  providerQuotas.update((list) => {
+    const next = [...list];
+    for (const quota of incoming) {
+      const idx = next.findIndex((existing) => isSameQuota(existing, quota));
+      if (idx >= 0) next[idx] = mergeAccountQuota(next[idx], quota);
+      else next.push(quota);
+    }
+    return next;
+  });
+}
+
+/** Live CLI read. Never awaited by callers: it shells out to the Codex CLI and must not
+ * delay the usage overview, which renders fine from persisted data alone. */
+function readLiveCodexQuotas(): void {
+  refreshCodexQuotas()
+    .then(applyQuotas)
+    .catch((err) => console.error('Failed to read live Codex quotas:', err));
+}
+
 export async function refreshUsageOverview() {
   isUsageLoading.set(true);
   try {
@@ -55,6 +77,9 @@ export async function refreshUsageOverview() {
   } finally {
     isUsageLoading.set(false);
   }
+  // Started only after the persisted baseline is in place, so the live sample merges
+  // on top of it instead of racing the `set` above.
+  readLiveCodexQuotas();
 }
 
 /** Start one shared subscription for account quota and session usage events.
