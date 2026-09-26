@@ -73,7 +73,7 @@ type Args = Record<string, any>;
  * @return Response converted to the requested command type.
  * @throws Error When the HTTP API rejects the request.
  * @author ductv <ductv@getflycrm.com>
- * @since 2026-09-26
+ * @since 2026-09-27
  */
 export async function webInvoke<T>(cmd: string, args?: Args): Promise<T> {
   switch (cmd) {
@@ -117,10 +117,12 @@ export async function webInvoke<T>(cmd: string, args?: Args): Promise<T> {
     case 'get_session_journal':
       return apiGet(`/sessions/${args!.sessionId}/journal`) as Promise<T>;
 
-    case 'get_session_journal_page':
+    case 'get_session_journal_page': {
+      const cursor = args!.cursor == null ? '' : `&cursor=${args!.cursor}`;
       return apiGet(
-        `/sessions/${args!.sessionId}/journal?offset=${args!.offset ?? 0}&limit=${args!.limit ?? 200}`
+        `/sessions/${args!.sessionId}/journal?limit=${args!.limit ?? 100}&direction=${args!.direction ?? 'backward'}${cursor}`
       ) as Promise<T>;
+    }
 
     // ── Providers ─────────────────────────────────────────────
     case 'get_providers':

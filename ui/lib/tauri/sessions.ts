@@ -79,6 +79,25 @@ export async function getSessionJournal(sessionId: number): Promise<JournalEntry
   return await invoke('get_session_journal', { sessionId });
 }
 
+/** Load a bounded conversation page so large sessions do not block project switching.
+ * @param sessionId Session whose conversation history is requested.
+ * @param cursor Optional sequence boundary for the requested page.
+ * @param limit Maximum number of entries returned.
+ * @param direction Whether entries before or after the cursor are requested.
+ * @return The latest page without a cursor, otherwise the adjacent history page.
+ * @throws When the desktop or web backend cannot read the journal.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-27
+ */
+export async function getSessionJournalPage(
+  sessionId: number,
+  cursor: number | null = null,
+  limit = 100,
+  direction: 'forward' | 'backward' = 'backward'
+): Promise<JournalEntry[]> {
+  return await invoke('get_session_journal_page', { sessionId, cursor, limit, direction });
+}
+
 export async function resetSessions(): Promise<void> {
   await invoke('reset_sessions');
 }

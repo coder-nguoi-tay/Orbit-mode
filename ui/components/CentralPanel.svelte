@@ -3,7 +3,7 @@
   import type { Session } from '../lib/stores/sessions';
   import { journal, pendingMessages } from '../lib/stores/journal';
   import { backends as backendsStore } from '../lib/stores/providers';
-  import { getSessionJournal } from '../lib/tauri/sessions';
+  import { getSessionJournalPage } from '../lib/tauri/sessions';
   import { invoke } from '../lib/tauri/invoke';
   import { updateSessionState, sessions } from '../lib/stores/sessions';
   import { statusColor, statusLabel, modelShortName } from '../lib/status';
@@ -26,20 +26,62 @@
 
   let feedComponent: Feed;
   let atBottom = true;
+  let hasEarlierHistory = false;
+  let loadingEarlierHistory = false;
+  const HISTORY_PAGE_SIZE = 100;
 
   /** Load one session's journal once and cache empty histories as well.
    * @param id Session whose history is being opened.
    * @return Completion after the journal cache has been checked or populated.
+   * @throws No propagated error; an unavailable journal leaves the session feed empty.
    * @author ductv <ductv@getflycrm.com>
-   * @since 2026-09-26
+   * @since 2026-09-27
    */
   async function loadHistory(id: number): Promise<void> {
-    if (get(journal).has(id)) return;
+    const cachedEntries = get(journal).get(id);
+    if (cachedEntries) {
+      hasEarlierHistory = cachedEntries.length >= HISTORY_PAGE_SIZE;
+      return;
+    }
     try {
-      const entries = await getSessionJournal(id);
+      const entries = await getSessionJournalPage(id, null, HISTORY_PAGE_SIZE);
       journal.update((m) => (m.has(id) ? m : new Map(m).set(id, entries)));
+      if (loadedId === id) hasEarlierHistory = entries.length === HISTORY_PAGE_SIZE;
     } catch (_e) {
       /* no-op */
+    }
+  }
+
+  /** Prepend one older journal page after the user reaches the top of the feed.
+   * @return Completion after older entries are merged into the current session cache.
+   * @throws No propagated error; an unavailable history page leaves the current feed intact.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  async function loadEarlierHistory(): Promise<void> {
+    if (loadingEarlierHistory || !hasEarlierHistory) return;
+    const sessionId = session.id;
+    const currentEntries = get(journal).get(sessionId) ?? [];
+    const firstEntry = currentEntries[0];
+    if (!firstEntry) return;
+
+    loadingEarlierHistory = true;
+    try {
+      const olderEntries = await getSessionJournalPage(
+        sessionId,
+        firstEntry.seq,
+        HISTORY_PAGE_SIZE,
+        'backward'
+      );
+      journal.update((currentJournal) => {
+        const latestEntries = currentJournal.get(sessionId) ?? [];
+        return new Map(currentJournal).set(sessionId, [...olderEntries, ...latestEntries]);
+      });
+      if (loadedId === sessionId) hasEarlierHistory = olderEntries.length === HISTORY_PAGE_SIZE;
+    } catch (_error) {
+      /* Keep the already loaded conversation usable. */
+    } finally {
+      loadingEarlierHistory = false;
     }
   }
 
@@ -178,6 +220,9 @@
           provider={session.provider ?? 'claude-code'}
           cwd={session.cwd}
           compact={effectiveCompact}
+          hasEarlierEntries={hasEarlierHistory}
+          loadingEarlierEntries={loadingEarlierHistory}
+          onLoadEarlier={loadEarlierHistory}
           on:bottomchange={(e) => (atBottom = e.detail.atBottom)}
         />
       {/key}

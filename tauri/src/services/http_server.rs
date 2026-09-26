@@ -438,26 +438,46 @@ async fn delete_session(
     Ok(Json(json!({ "sessionId": id, "deleted": true })))
 }
 
+#[derive(Default, Deserialize)]
+struct JournalPageQuery {
+    cursor: Option<u32>,
+    limit: Option<usize>,
+    direction: Option<String>,
+}
+
+/// Return either the complete journal or one bounded page for large conversations.
+///
+/// @param state Shared application services containing the session manager.
+/// @param headers Authorization headers for the web client.
+/// @param id Session whose journal is requested.
+/// @param query Optional cursor pagination parameters.
+/// @return Serialized journal entries visible to the authenticated client.
+/// @throws StatusCode When authentication or serialization fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-27
 async fn get_journal(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(id): Path<SessionId>,
+    Query(query): Query<JournalPageQuery>,
 ) -> Result<Json<Value>, StatusCode> {
     validate_bearer(&state.db, &headers)?;
 
-    let m = state
+    let mut manager = state
         .session_manager
-        .read()
+        .write()
         .unwrap_or_else(|e| e.into_inner());
-
-    let entries = m
-        .journal_states
-        .get(&id)
-        .map(|js| &js.entries)
-        .cloned()
-        .unwrap_or_default();
-
-    drop(m);
+    let entries = if query.cursor.is_some() || query.limit.is_some() || query.direction.is_some() {
+        manager.get_journal_page(
+            id,
+            query.cursor,
+            query.limit.unwrap_or(100),
+            query.direction.as_deref() == Some("backward"),
+        )
+    } else {
+        manager.get_journal(id)
+    };
+    drop(manager);
 
     serde_json::to_value(entries)
         .map(Json)

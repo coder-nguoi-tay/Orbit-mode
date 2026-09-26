@@ -4,13 +4,15 @@
   import Markdown from './Markdown.svelte';
   import ToolCallEntry from './ToolCallEntry.svelte';
   import { backends } from '../lib/stores/providers';
-  import { fly } from '../lib/motion';
 
   export let entries: JournalEntry[] = [];
   export let status: string = '';
   export let provider: string = 'claude-code';
   export let cwd: string | null = null;
   export let compact = false;
+  export let hasEarlierEntries = false;
+  export let loadingEarlierEntries = false;
+  export let onLoadEarlier: (() => Promise<void>) | null = null;
 
   $: agentLabel = (() => {
     const direct = $backends.find((b) => b.id === provider);
@@ -159,10 +161,15 @@
 
   $: visibleItems = rows.slice(visibleFrom);
 
-  $: hasMore = visibleFrom > 0;
+  $: hasMore = visibleFrom > 0 || hasEarlierEntries;
 
   // ── Scroll handling ────────────────────────────────────────────────────────
-  function onScroll() {
+  /** Update follow mode and request older history when the viewport reaches the top.
+   * @return No value; scroll state and history loading are updated through component events.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function onScroll(): void {
     if (!scrollerEl) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollerEl;
 
@@ -191,13 +198,29 @@
     lastScrollTop = scrollTop;
 
     // Near the top — load previous chunk
-    if (scrollTop < 80 && visibleFrom > 0) {
+    if (scrollTop < 80 && (visibleFrom > 0 || hasEarlierEntries)) {
       loadMore();
     }
   }
 
-  async function loadMore() {
-    if (visibleFrom === 0) return;
+  /** Reveal a local chunk or request the previous persisted journal page.
+   * @return Completion after the existing scroll anchor is restored.
+   * @throws No propagated error; external page failures are handled by the parent panel.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  async function loadMore(): Promise<void> {
+    if (visibleFrom === 0) {
+      if (hasEarlierEntries && !loadingEarlierEntries && onLoadEarlier) {
+        const previousScrollHeight = scrollerEl.scrollHeight;
+        await onLoadEarlier();
+        await tick();
+        programmaticScroll = true;
+        scrollerEl.scrollTop += scrollerEl.scrollHeight - previousScrollHeight;
+        lastScrollTop = scrollerEl.scrollTop;
+      }
+      return;
+    }
     // Capture anchor element before prepending items
     const anchor = scrollerEl.firstElementChild as HTMLElement | null;
     const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
@@ -277,7 +300,9 @@
 <div class="feed-scroller" class:compact bind:this={scrollerEl} onscroll={onScroll}>
   <div class="timeline">
     {#if hasMore}
-      <button type="button" class="load-more" onclick={loadMore}>load earlier</button>
+      <button type="button" class="load-more" onclick={loadMore} disabled={loadingEarlierEntries}>
+        {loadingEarlierEntries ? 'loading…' : 'load earlier'}
+      </button>
     {/if}
 
     {#each visibleItems as row, i (visibleFrom + i)}
@@ -327,7 +352,6 @@
         <article
           class="timeline-event {eventClass(entry)}"
           aria-label="{actorLabel(entry)} {ts(entry)}"
-          in:fly|local={{ y: 8, duration: 180 }}
         >
           <div class="timeline-node {eventClass(entry)}" aria-hidden="true"></div>
           <div class="timeline-body">

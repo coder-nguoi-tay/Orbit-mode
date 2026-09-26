@@ -14,6 +14,7 @@ import {
   sendSessionMessage,
   listSessions,
   getSessionJournal,
+  getSessionJournalPage,
 } from './sessions';
 import {
   getSlashCommands,
@@ -210,6 +211,21 @@ describe('tauri mock wrapper', () => {
     it('should return empty array for non-existent session', async () => {
       const entries = await getSessionJournal(9999);
       expect(entries).toEqual([]);
+    });
+  });
+
+  describe('getSessionJournalPage', () => {
+    it('returns only the requested latest entries', async () => {
+      const entries = await getSessionJournalPage(1, null, 2);
+      expect(entries.length).toBeLessThanOrEqual(2);
+    });
+
+    it('returns entries older than the cursor', async () => {
+      const latest = await getSessionJournalPage(1, null, 2);
+      const cursor = latest[0]?.seq;
+      if (cursor == null) return;
+      const older = await getSessionJournalPage(1, cursor, 2, 'backward');
+      expect(older.every((entry) => entry.seq < cursor)).toBe(true);
     });
   });
 

@@ -1934,6 +1934,49 @@ impl SessionManager {
             .unwrap_or_default()
     }
 
+    /// Return one journal page relative to an entry sequence number.
+    ///
+    /// @param session_id Session whose conversation history is requested.
+    /// @param cursor Optional sequence boundary for older or newer entries.
+    /// @param limit Maximum number of entries returned in one page.
+    /// @param backward Whether to return entries older than the cursor.
+    /// @return The latest page without a cursor, otherwise the requested adjacent page.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-27
+    pub fn get_journal_page(
+        &mut self,
+        session_id: SessionId,
+        cursor: Option<u32>,
+        limit: usize,
+        backward: bool,
+    ) -> Vec<crate::models::JournalEntry> {
+        let entries = self.get_journal(session_id);
+        match cursor {
+            Some(seq) if backward => entries
+                .into_iter()
+                .filter(|entry| entry.seq < seq)
+                .rev()
+                .take(limit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+            Some(seq) => entries
+                .into_iter()
+                .filter(|entry| entry.seq > seq)
+                .take(limit)
+                .collect(),
+            None => entries
+                .into_iter()
+                .rev()
+                .take(limit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+        }
+    }
+
     /// Load journal state for `session_id` and restore persisted provider quota samples.
     ///
     /// @param session_id Session whose stored JSONL output is replayed.
@@ -1971,7 +2014,13 @@ impl SessionManager {
 
         let mut state = JournalState::default();
         for line in &rows {
+            let previous_entry_count = state.entries.len();
             line_processor(&mut state, line);
+            for entry in &mut state.entries[previous_entry_count..] {
+                entry.seq = state.next_seq;
+                entry.epoch = state.epoch.clone();
+                state.next_seq += 1;
+            }
         }
 
         if matches!(provider_owned.as_str(), "codex" | "claude-code" | "claude")
@@ -2882,6 +2931,42 @@ mod tests {
             "entry type",
             journal[0].entry_type,
             crate::models::JournalEntryType::User,
+        );
+    }
+
+    /// Verify restored conversations receive stable sequence numbers for cursor pagination.
+    ///
+    /// @return No value; assertions cover latest and backward journal pages.
+    /// @throws Panic If replayed entries cannot be paginated in conversation order.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-27
+    #[test]
+    fn should_paginate_restored_journal_by_sequence() {
+        let db = make_db();
+        let session_id = db
+            .create_session(None, None, "/tmp", "ignore", None, None, None, None)
+            .expect("session");
+        seed_outputs(
+            &db,
+            session_id,
+            &[
+                &crate::test_utils::assistant_text("first"),
+                &crate::test_utils::assistant_text("second"),
+                &crate::test_utils::assistant_text("third"),
+            ],
+        );
+
+        let mut session_manager = SessionManager::new(Arc::clone(&db));
+        let latest = session_manager.get_journal_page(session_id, None, 2, true);
+        assert_eq!(
+            latest.iter().map(|entry| entry.seq).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let older = session_manager.get_journal_page(session_id, Some(1), 2, true);
+        assert_eq!(
+            older.iter().map(|entry| entry.seq).collect::<Vec<_>>(),
+            vec![0]
         );
     }
 

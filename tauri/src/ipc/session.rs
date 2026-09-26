@@ -236,9 +236,16 @@ pub fn get_session_journal(session_id: SessionId, state: State<SessionState>) ->
     state.write().get_journal(session_id)
 }
 
-/// Get a paginated slice of journal entries for a session.
-/// `cursor` is the seq number to start from, `limit` is max entries to return.
-/// `direction` is "forward" (newer) or "backward" (older).
+/// Get a bounded journal page relative to a sequence cursor.
+///
+/// @param session_id Session whose conversation history is requested.
+/// @param cursor Optional sequence boundary for the page.
+/// @param limit Optional maximum page size; defaults to 100 entries.
+/// @param direction Optional "forward" or "backward" traversal direction.
+/// @param state Shared session manager state.
+/// @return The latest page without a cursor, otherwise the adjacent page.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-27
 #[tauri::command]
 pub fn get_session_journal_page(
     session_id: SessionId,
@@ -247,40 +254,11 @@ pub fn get_session_journal_page(
     direction: Option<String>,
     state: State<SessionState>,
 ) -> Vec<JournalEntry> {
-    let entries = state.write().get_journal(session_id);
     let limit = limit.unwrap_or(100);
     let is_backward = direction.as_deref() == Some("backward");
-
-    match cursor {
-        Some(seq) => {
-            if is_backward {
-                entries
-                    .into_iter()
-                    .filter(|e| e.seq < seq)
-                    .rev()
-                    .take(limit)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect()
-            } else {
-                entries
-                    .into_iter()
-                    .filter(|e| e.seq > seq)
-                    .take(limit)
-                    .collect()
-            }
-        }
-        None => {
-            // No cursor: return latest entries
-            let len = entries.len();
-            if len > limit {
-                entries[len - limit..].to_vec()
-            } else {
-                entries
-            }
-        }
-    }
+    state
+        .write()
+        .get_journal_page(session_id, cursor, limit, is_backward)
 }
 
 /// Diagnostic: check if claude CLI is available and return its path or an error message.

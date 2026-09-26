@@ -570,6 +570,14 @@ let journals: Record<number, JournalEntry[]> = { ...MOCK_JOURNAL };
 import type { Pipeline } from '../types';
 let mockPipelines: Pipeline[] = [];
 
+/** Execute one simulated Tauri command against deterministic in-memory fixtures.
+ * @param cmd Tauri command name requested by the UI.
+ * @param args Optional command arguments.
+ * @return The mocked command response after simulated IPC latency.
+ * @throws When a command intentionally models an unsupported operation.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-27
+ */
 export async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   await delay(80); // realistic latency
 
@@ -591,9 +599,15 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
 
     case 'get_session_journal_page': {
       const id = Number(args?.sessionId ?? 0);
-      const offset = Number(args?.offset ?? 0);
       const limit = Number(args?.limit ?? 200);
-      return (journals[id] ?? []).slice(offset, offset + limit);
+      const cursor = args?.cursor == null ? null : Number(args.cursor);
+      const direction = String(args?.direction ?? 'backward');
+      const entries = journals[id] ?? [];
+      if (cursor == null) return entries.slice(-limit);
+      const adjacent = entries.filter((entry) =>
+        direction === 'backward' ? entry.seq < cursor : entry.seq > cursor
+      );
+      return direction === 'backward' ? adjacent.slice(-limit) : adjacent.slice(0, limit);
     }
 
     case 'get_session_raw_outputs': {
