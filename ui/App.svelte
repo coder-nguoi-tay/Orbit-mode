@@ -244,28 +244,28 @@
           void notifyAttentionOnce(
             p.sessionId,
             reason,
-            'Orbit — session finished',
+            'Orbit-mode — session finished',
             `${name} completed`
           );
         } else if (reason === 'permission') {
           void notifyAttentionOnce(
             p.sessionId,
             reason,
-            'Orbit — approval needed',
+            'Orbit-mode — approval needed',
             `${name} is waiting for permission`
           );
         } else if (reason === 'error') {
           void notifyAttentionOnce(
             p.sessionId,
             reason,
-            'Orbit — session error',
+            'Orbit-mode — session error',
             `${name} reported an error`
           );
         } else if (reason === 'rateLimit') {
           void notifyAttentionOnce(
             p.sessionId,
             reason,
-            'Orbit — rate limit',
+            'Orbit-mode — rate limit',
             `${name} hit a rate limit`
           );
         }
@@ -285,7 +285,7 @@
       appendSessionFeedMessage(id, `Session failed to start: ${error}`, { error: true });
       void notifyDesktop({
         sessionId: id,
-        title: 'Orbit — session failed',
+        title: 'Orbit-mode — session failed',
         body: `${sessionDisplayName(id)}: ${error}`,
       });
       if (!isSessionOpenInWorkspace(id)) {
@@ -308,7 +308,7 @@
       taskNotifyAt.set(id, now);
       void notifyDesktop({
         sessionId: id,
-        title: 'Orbit — tasks updated',
+        title: 'Orbit-mode — tasks updated',
         body: `${sessionDisplayName(id)} task list changed`,
       });
     });
@@ -383,7 +383,7 @@
       handoffSessionId = sessionId;
       void notifyDesktop({
         sessionId,
-        title: 'Orbit — account needs action',
+        title: 'Orbit-mode — account needs action',
         body: `${sessionDisplayName(sessionId)} reached its current usage limit`,
       });
     });
@@ -414,7 +414,7 @@
             ['running', 'waiting', 'needs_account_action'].includes(session.status)
         ).length;
         void notifyDesktop({
-          title: 'Orbit — account status changed',
+          title: 'Orbit-mode — account status changed',
           body: `${label}: ${status}. ${affectedSessions} sessions use this profile.`,
         });
       }
@@ -636,7 +636,7 @@
             <rect x="2" y="14" width="16" height="2" rx="1" fill="currentColor" />
           </svg>
         </button>
-        <span class="mobile-title">orbit</span>
+        <span class="mobile-title">Orbit-mode</span>
         <button
           class="mobile-beta-badge"
           on:click={() => (showMobileBetaModal = true)}

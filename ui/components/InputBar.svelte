@@ -154,7 +154,7 @@
     const providerList = installed || 'none detected';
     const unavailable = notInstalled ? `\nNot installed: ${notInstalled}` : '';
 
-    const intro = `You have access to Orbit's multi-agent orchestration tools via MCP. Use them to delegate tasks to other AI agents.
+    const intro = `You have access to Orbit-mode's multi-agent orchestration tools via MCP. Use them to delegate tasks to other AI agents.
 
 ## IMPORTANT — Always discover providers first
 
@@ -169,7 +169,7 @@ ${providerList}${unavailable}
 Returns all providers with models[], subProviders[], effortLevels, and capabilities. **Call this first.**
 
 ### orbit_create_agent
-Spawn a new agent session visible in the Orbit dashboard.
+Spawn a new agent session visible in the Orbit-mode dashboard.
 - **name**: display name in sidebar (optional, e.g. "test runner")
 - **provider**: provider ID from orbit_list_providers (default: claude-code)
 - **model**: exact model ID from orbit_list_providers (optional)
@@ -237,19 +237,19 @@ Get subagent tree for a session.
       ? `\n- Use provider "${preferredProvider}" if orbit_list_providers reports it as a provider id or OpenCode subProviders[].id.`
       : `\n- Prefer the current provider "${provider}" if it is available; otherwise pick the best installed provider.`;
 
-    const intro = `You are Orbit's agent factory. Your job is to create a new named agent session in the current workspace, not to do the requested work yourself.
+    const intro = `You are Orbit-mode's agent factory. Your job is to create a new named agent session in the current workspace, not to do the requested work yourself.
 
 ## Current workspace
 Use this exact cwd for the new agent:
 \`${workspacePath}\`
 
 ## Parent session
-This factory prompt is running inside Orbit session ${currentSessionId}. Every agent you create must be a child of this session.
-Always pass parentSessionId: ${currentSessionId} to orbit_create_agent so the new agent appears under the current session in the Orbit tree.
+This factory prompt is running inside Orbit-mode session ${currentSessionId}. Every agent you create must be a child of this session.
+Always pass parentSessionId: ${currentSessionId} to orbit_create_agent so the new agent appears under the current session in the Orbit-mode tree.
 
 ## Provider discovery
 Always call orbit_list_providers first. Do not guess provider IDs or model IDs.
-Installed providers snapshot from Orbit UI: ${providerList}${providerHint}
+Installed providers snapshot from Orbit-mode UI: ${providerList}${providerHint}
 
 ## OpenCode model rules
 - orbit_list_providers returns OpenCode options under subProviders[].
@@ -272,7 +272,7 @@ After creating the agent, report the sessionId, name, provider, and the mission 
 The prompt you pass to orbit_create_agent must include:
 
 1. Identity
-You are <agent name>, an Orbit agent working in this repository.
+You are <agent name>, an Orbit-mode agent working in this repository.
 
 2. Mission
 A concise mission derived from the user's request.
@@ -298,7 +298,7 @@ A concise mission derived from the user's request.
 - If the user says "agent CEO", use "CEO" unless they provide a more specific name.
 - If the user says "chamado X", "nome X", or "agent X", use X as the session name.
 - Keep names under 32 characters.
-- Do not add project suffixes; Orbit already knows the workspace.
+- Do not add project suffixes; Orbit-mode already knows the workspace.
 
 ## If the request is incomplete
 If the user provides a role/name but no detailed mission, create a bootstrap agent for that role. For example, "agent CEO" should create a CEO agent whose mission is to understand the workspace, define operating strategy, propose the first org chart, and recommend the next agents to create.
@@ -381,7 +381,7 @@ If the user provides neither role nor name nor mission, ask one concise question
     const cmd = msg.split(/\s/)[0].toLowerCase();
 
     if (INTERACTIVE_CMDS.has(cmd)) {
-      showChatError(`${cmd} requires interactive input and is not supported inside Orbit`);
+      showChatError(`${cmd} requires interactive input and is not supported inside Orbit-mode`);
       return;
     }
 
@@ -606,7 +606,7 @@ If the user provides neither role nor name nor mission, ask one concise question
         ? 'waiting for session to start...'
         : sessionStatus === 'stopped'
           ? 'Session stopped — type to resume...'
-          : 'Message Orbit…'}
+          : 'Message Orbit-mode…'}
       rows="1"
       disabled={sessionStatus === 'initializing'}
       data-testid="message-input"

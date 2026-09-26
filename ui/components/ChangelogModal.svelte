@@ -16,7 +16,7 @@
 >
   <div class="modal-header">
     <div class="modal-title">
-      <span class="title-text">what's new in orbit</span>
+      <span class="title-text">what's new in Orbit-mode</span>
       <span class="version-badge">v{currentVersion}</span>
     </div>
     <button class="close-btn" on:click={onClose} aria-label="Close">✕</button>

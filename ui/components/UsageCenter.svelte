@@ -16,6 +16,7 @@
     HelpCircle,
     ChevronDown,
     ChevronRight,
+    TrendingUp,
   } from 'lucide-svelte';
   import Modal from './shared/Modal.svelte';
   import {
@@ -50,6 +51,11 @@
   let activeTab: 'agents' | 'projects' | 'models' = 'agents';
   let quotasExpanded = false;
 
+  type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
+  let selectedTimeRange: TimeRange = '24h';
+  let hoveredPointIndex: number | null = null;
+  let svgElement: SVGSVGElement | null = null;
+
   onMount(async () => {
     await refreshProviderAccounts();
     await refreshUsageOverview();
@@ -76,6 +82,7 @@
 
   // Merge persisted quotas with the latest rate-limit state from active sessions.
   let codexQuotas: ProviderQuota[] = [];
+  let claudeQuota: ProviderQuota | null = null;
   $: {
     const quotasByAccount = new Map<string, ProviderQuota>();
     for (const quota of $providerQuotas) {
@@ -85,12 +92,14 @@
       );
     }
     for (const session of $sessions) {
-      if (session.provider !== 'codex' || !session.rateLimit?.length) continue;
+      if (!session.rateLimit?.length) continue;
+      const provider = session.provider ?? 'claude-code';
+      if (provider !== 'codex' && provider !== 'claude-code' && provider !== 'claude') continue;
       const accountKey = session.providerAccountId ?? 'default';
       const fiveHourLimit = session.rateLimit.find((limit) => limit.rateLimitType === 'five_hour');
       const sevenDayLimit = session.rateLimit.find((limit) => limit.rateLimitType === 'seven_day');
       const liveQuota: ProviderQuota = {
-        provider: 'codex',
+        provider,
         accountKey,
         providerAccountId: session.providerAccountId,
         fiveHour: fiveHourLimit
@@ -110,7 +119,7 @@
         updatedAt: session.updatedAt,
         source: 'session_event',
       };
-      const quotaKey = `codex:${accountKey}`;
+      const quotaKey = `${provider}:${accountKey}`;
       const persistedQuota = quotasByAccount.get(quotaKey);
       quotasByAccount.set(
         quotaKey,
@@ -125,6 +134,14 @@
       );
     }
     codexQuotas = [...quotasByAccount.values()].filter((quota) => quota.provider === 'codex');
+    claudeQuota =
+      [...quotasByAccount.values()].find(
+        (q) => q.provider === 'claude-code' || q.provider === 'claude'
+      ) ??
+      $providerQuotas.find(
+        (q: ProviderQuota) => q.provider === 'claude-code' || q.provider === 'claude'
+      ) ??
+      null;
   }
   $: codexQuotaCards = (() => {
     const codexAccounts = Object.values($providerAccounts).filter(
@@ -167,10 +184,6 @@
       );
     });
   })();
-  $: claudeQuota = $providerQuotas.find(
-    (q: ProviderQuota) => q.provider === 'claude-code' || q.provider === 'claude'
-  );
-
   // Combine live sessions and snapshots
   $: combinedAgents = (() => {
     const list: Array<{
@@ -244,7 +257,7 @@
       return sortAsc ? cmp : -cmp;
     });
 
-  function openAgentSession(sessionId: number) {
+  function openAgentSession(sessionId: number): void {
     const ws = $workspace;
     if (ws.focusedPaneId) {
       assignSession(ws.focusedPaneId, sessionId);
@@ -260,6 +273,326 @@
   function getContextColorClass(pct: number): string {
     const status = getContextStatus(pct);
     return `ctx-${status}`;
+  }
+
+  const tokenChart = {
+    width: 900,
+    height: 220,
+    padding: { top: 22, right: 28, bottom: 32, left: 52 },
+  };
+
+  interface ChartBucket {
+    bucketStart: string;
+    totalTokens: number;
+    displayDate: string;
+    displayTime: string;
+    detailLabel: string;
+  }
+
+  $: rawTokenHistory = $usageOverview?.tokenUsageHistory ?? [];
+
+  $: tokenUsageHistory = (() => {
+    const now = new Date();
+    const buckets: ChartBucket[] = [];
+
+    if (selectedTimeRange === '30d') {
+      // 30 discrete daily buckets (from 29 days ago to today)
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 0, 0, 0, 0);
+        const nextD = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i + 1, 0, 0, 0, 0);
+        const startTime = d.getTime();
+        const endTime = nextD.getTime();
+
+        const sum = rawTokenHistory
+          .filter((pt) => {
+            const ptTime = new Date(pt.bucketStart).getTime();
+            return ptTime >= startTime && ptTime < endTime;
+          })
+          .reduce((acc, pt) => acc + pt.totalTokens, 0);
+
+        const isToday = i === 0;
+        const displayDate = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const detailLabel = `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}${isToday ? ' (Today)' : ''}`;
+
+        buckets.push({
+          bucketStart: d.toISOString(),
+          totalTokens: sum,
+          displayDate,
+          displayTime: isToday ? 'Today' : displayDate,
+          detailLabel,
+        });
+      }
+    } else if (selectedTimeRange === '7d') {
+      // 7 discrete daily buckets (from 6 days ago to today)
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 0, 0, 0, 0);
+        const nextD = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i + 1, 0, 0, 0, 0);
+        const startTime = d.getTime();
+        const endTime = nextD.getTime();
+
+        const sum = rawTokenHistory
+          .filter((pt) => {
+            const ptTime = new Date(pt.bucketStart).getTime();
+            return ptTime >= startTime && ptTime < endTime;
+          })
+          .reduce((acc, pt) => acc + pt.totalTokens, 0);
+
+        const isToday = i === 0;
+        const displayDate = d.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' });
+        const detailLabel = `${d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}${isToday ? ' (Today)' : ''}`;
+
+        buckets.push({
+          bucketStart: d.toISOString(),
+          totalTokens: sum,
+          displayDate,
+          displayTime: isToday ? 'Today' : displayDate,
+          detailLabel,
+        });
+      }
+    } else if (selectedTimeRange === '24h') {
+      // 24 discrete hourly buckets
+      const curHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0);
+      for (let i = 23; i >= 0; i--) {
+        const startH = new Date(curHour.getTime() - i * 3600000);
+        const endH = new Date(startH.getTime() + 3600000);
+        const startTime = startH.getTime();
+        const endTime = endH.getTime();
+
+        const sum = rawTokenHistory
+          .filter((pt) => {
+            const ptTime = new Date(pt.bucketStart).getTime();
+            return ptTime >= startTime && ptTime < endTime;
+          })
+          .reduce((acc, pt) => acc + pt.totalTokens, 0);
+
+        const isCurrentHour = i === 0;
+        const displayTime = startH.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const displayDate = startH.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const detailLabel = `${displayDate} · ${displayTime}${isCurrentHour ? ' (Now)' : ''}`;
+
+        buckets.push({
+          bucketStart: startH.toISOString(),
+          totalTokens: sum,
+          displayDate,
+          displayTime,
+          detailLabel,
+        });
+      }
+    } else if (selectedTimeRange === '6h') {
+      // 6 discrete hourly buckets
+      const curHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0);
+      for (let i = 5; i >= 0; i--) {
+        const startH = new Date(curHour.getTime() - i * 3600000);
+        const endH = new Date(startH.getTime() + 3600000);
+        const startTime = startH.getTime();
+        const endTime = endH.getTime();
+
+        const sum = rawTokenHistory
+          .filter((pt) => {
+            const ptTime = new Date(pt.bucketStart).getTime();
+            return ptTime >= startTime && ptTime < endTime;
+          })
+          .reduce((acc, pt) => acc + pt.totalTokens, 0);
+
+        const isCurrentHour = i === 0;
+        const displayTime = startH.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const displayDate = startH.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const detailLabel = `${displayDate} · ${displayTime}${isCurrentHour ? ' (Now)' : ''}`;
+
+        buckets.push({
+          bucketStart: startH.toISOString(),
+          totalTokens: sum,
+          displayDate,
+          displayTime,
+          detailLabel,
+        });
+      }
+    } else {
+      // 1h: 12 discrete 5-minute buckets
+      const cur5Min = new Date(Math.floor(now.getTime() / (5 * 60000)) * 5 * 60000);
+      for (let i = 11; i >= 0; i--) {
+        const startM = new Date(cur5Min.getTime() - i * 5 * 60000);
+        const endM = new Date(startM.getTime() + 5 * 60000);
+        const startTime = startM.getTime();
+        const endTime = endM.getTime();
+
+        const sum = rawTokenHistory
+          .filter((pt) => {
+            const ptTime = new Date(pt.bucketStart).getTime();
+            return ptTime >= startTime && ptTime < endTime;
+          })
+          .reduce((acc, pt) => acc + pt.totalTokens, 0);
+
+        const isCurrent = i === 0;
+        const displayTime = startM.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const detailLabel = `${startM.toLocaleDateString([], { month: 'short', day: 'numeric' })} · ${displayTime}${isCurrent ? ' (Now)' : ''}`;
+
+        buckets.push({
+          bucketStart: startM.toISOString(),
+          totalTokens: sum,
+          displayDate: displayTime,
+          displayTime,
+          detailLabel,
+        });
+      }
+    }
+
+    return buckets;
+  })();
+
+  $: rangeTotalTokens = tokenUsageHistory.reduce((sum, pt) => sum + pt.totalTokens, 0);
+  $: tokenHistoryMax = Math.max(1, ...tokenUsageHistory.map((point) => point.totalTokens));
+
+  $: axisTicks = (() => {
+    if (tokenUsageHistory.length === 0) return [];
+    const len = tokenUsageHistory.length;
+    let indices: number[] = [];
+
+    if (selectedTimeRange === '30d') {
+      indices = [0, 6, 12, 18, 24, len - 1];
+    } else if (selectedTimeRange === '7d') {
+      indices = [0, 1, 2, 3, 4, 5, len - 1];
+    } else if (selectedTimeRange === '24h') {
+      indices = [0, 6, 12, 18, len - 1];
+    } else if (selectedTimeRange === '6h') {
+      indices = [0, 1, 2, 3, 4, len - 1];
+    } else {
+      indices = [0, 3, 6, 9, len - 1];
+    }
+
+    return indices.map((idx, i) => {
+      const pt = tokenUsageHistory[idx];
+      const isLast = i === indices.length - 1;
+      let label = pt?.displayTime ?? '';
+      if (isLast) {
+        label = selectedTimeRange === '30d' || selectedTimeRange === '7d' ? 'TODAY' : 'NOW';
+      }
+      return { idx, label };
+    });
+  })();
+
+  $: tokenChartPoints = (() => {
+    const plotWidth = tokenChart.width - tokenChart.padding.left - tokenChart.padding.right;
+    const plotHeight = tokenChart.height - tokenChart.padding.top - tokenChart.padding.bottom;
+
+    if (tokenUsageHistory.length === 0) {
+      return [];
+    }
+
+    const n = tokenUsageHistory.length;
+    const points = tokenUsageHistory.map((point, index) => {
+      const progress = n > 1 ? index / (n - 1) : 0.5;
+      const x = tokenChart.padding.left + progress * plotWidth;
+      const y =
+        tokenChart.padding.top +
+        (1 - point.totalTokens / tokenHistoryMax) * plotHeight;
+      return { ...point, x, y, index };
+    });
+
+    return points;
+  })();
+
+  /** Monotone Cubic Spline (Fritsch-Carlson) - smooth curves without negative undershoot */
+  function generateSmoothPath(points: Array<{ x: number; y: number }>): string {
+    const n = points.length;
+    if (n === 0) return '';
+    if (n === 1) return `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+    if (n === 2) {
+      return `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)} L ${points[1].x.toFixed(2)},${points[1].y.toFixed(2)}`;
+    }
+
+    const baselineY = tokenChart.height - tokenChart.padding.bottom;
+    const topY = tokenChart.padding.top;
+
+    // 1. Calculate secants (slopes between consecutive points)
+    const deltas: number[] = [];
+    const dxs: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = points[i + 1].x - points[i].x;
+      const dy = points[i + 1].y - points[i].y;
+      dxs.push(dx);
+      deltas.push(dx !== 0 ? dy / dx : 0);
+    }
+
+    // 2. Calculate initial tangents
+    const m: number[] = new Array(n).fill(0);
+    m[0] = deltas[0];
+    m[n - 1] = deltas[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      if (deltas[i - 1] * deltas[i] <= 0) {
+        m[i] = 0;
+      } else {
+        m[i] = (deltas[i - 1] + deltas[i]) / 2;
+      }
+    }
+
+    // 3. Fritsch-Carlson monotonicity constraint
+    for (let i = 0; i < n - 1; i++) {
+      if (Math.abs(deltas[i]) < 1e-9) {
+        m[i] = 0;
+        m[i + 1] = 0;
+      } else {
+        const alpha = m[i] / deltas[i];
+        const beta = m[i + 1] / deltas[i];
+        const dist = alpha * alpha + beta * beta;
+        if (dist > 9) {
+          const tau = 3 / Math.sqrt(dist);
+          m[i] = tau * alpha * deltas[i];
+          m[i + 1] = tau * beta * deltas[i];
+        }
+      }
+    }
+
+    // 4. Build cubic bezier SVG path with boundary clamping
+    let path = `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+    for (let i = 0; i < n - 1; i++) {
+      const dx = dxs[i];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+
+      const cp1x = p1.x + dx / 3;
+      const cp1y = Math.max(topY, Math.min(baselineY, p1.y + (m[i] * dx) / 3));
+      const cp2x = p2.x - dx / 3;
+      const cp2y = Math.max(topY, Math.min(baselineY, p2.y - (m[i + 1] * dx) / 3));
+
+      path += ` C ${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+    }
+    return path;
+  }
+
+  $: smoothCurvePath = generateSmoothPath(tokenChartPoints);
+  $: smoothAreaPath = (() => {
+    if (tokenChartPoints.length === 0) return '';
+    const baselineY = tokenChart.height - tokenChart.padding.bottom;
+    const last = tokenChartPoints[tokenChartPoints.length - 1];
+    const first = tokenChartPoints[0];
+    return `${smoothCurvePath} L ${last.x.toFixed(2)},${baselineY} L ${first.x.toFixed(2)},${baselineY} Z`;
+  })();
+
+  function handleChartMouseMove(event: MouseEvent) {
+    if (!svgElement || tokenChartPoints.length === 0) return;
+    const ctm = svgElement.getScreenCTM();
+    if (!ctm) return;
+    const pt = svgElement.createSVGPoint();
+    pt.x = event.clientX;
+    pt.y = event.clientY;
+    const svgPoint = pt.matrixTransform(ctm.inverse());
+    const mouseSvgX = svgPoint.x;
+
+    let closestIdx = 0;
+    let closestDist = Infinity;
+    for (let i = 0; i < tokenChartPoints.length; i++) {
+      const dist = Math.abs(tokenChartPoints[i].x - mouseSvgX);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIdx = i;
+      }
+    }
+    hoveredPointIndex = closestIdx;
+  }
+
+  function handleChartMouseLeave() {
+    hoveredPointIndex = null;
   }
 </script>
 
@@ -342,6 +675,235 @@
   </div>
 
   <div class="content-scroll">
+    <!-- Hourly / Time-ranged token history with smooth curves & interactive tooltips -->
+    <section class="token-history-card" aria-label="Token usage over time">
+      <div class="token-history-header">
+        <div class="token-history-title-block">
+          <div class="section-title">
+            <TrendingUp size={15} />
+            <span>TOKEN USAGE OVER TIME</span>
+          </div>
+          <div class="token-history-subtitle">
+            {#if selectedTimeRange === '1h'}
+              Last 1 hour · minute resolution
+            {:else if selectedTimeRange === '6h'}
+              Last 6 hours · token volume per hour
+            {:else if selectedTimeRange === '24h'}
+              Last 24 hours · new tokens per hour
+            {:else if selectedTimeRange === '7d'}
+              Last 7 days · daily token aggregates
+            {:else}
+              Last 30 days · monthly token aggregates
+            {/if}
+          </div>
+        </div>
+
+        <div class="token-history-controls">
+          <!-- Time range selector -->
+          <div class="time-range-group" role="radiogroup" aria-label="Select time range">
+            <button
+              class="time-range-btn"
+              class:active={selectedTimeRange === '1h'}
+              on:click={() => (selectedTimeRange = '1h')}
+            >
+              1H
+            </button>
+            <button
+              class="time-range-btn"
+              class:active={selectedTimeRange === '6h'}
+              on:click={() => (selectedTimeRange = '6h')}
+            >
+              6H
+            </button>
+            <button
+              class="time-range-btn"
+              class:active={selectedTimeRange === '24h'}
+              on:click={() => (selectedTimeRange = '24h')}
+            >
+              24H
+            </button>
+            <button
+              class="time-range-btn"
+              class:active={selectedTimeRange === '7d'}
+              on:click={() => (selectedTimeRange = '7d')}
+            >
+              7D
+            </button>
+            <button
+              class="time-range-btn"
+              class:active={selectedTimeRange === '30d'}
+              on:click={() => (selectedTimeRange = '30d')}
+            >
+              30D
+            </button>
+          </div>
+
+          <!-- Total & Peak chip badges -->
+          <div class="token-stat-chips">
+            <div class="token-stat-chip total">
+              <span class="chip-label">Total</span>
+              <span class="chip-val">{formatTokens(rangeTotalTokens)}</span>
+            </div>
+            <div class="token-stat-chip peak">
+              <span class="chip-label">Peak</span>
+              <span class="chip-val">{formatTokens(tokenHistoryMax)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {#if tokenChartPoints.length > 0}
+        {@const midY = tokenChart.padding.top + (tokenChart.height - tokenChart.padding.top - tokenChart.padding.bottom) / 2}
+        {@const bottomY = tokenChart.height - tokenChart.padding.bottom}
+        {@const topY = tokenChart.padding.top}
+        {@const hoveredPoint = hoveredPointIndex !== null && tokenChartPoints[hoveredPointIndex] ? tokenChartPoints[hoveredPointIndex] : null}
+
+        <div class="token-chart-wrap">
+          <svg
+            bind:this={svgElement}
+            class="token-chart"
+            viewBox={`0 0 ${tokenChart.width} ${tokenChart.height}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label="Token usage chart"
+            on:mousemove={handleChartMouseMove}
+            on:mouseleave={handleChartMouseLeave}
+          >
+            <defs>
+              <linearGradient id="tokenSmoothGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#00d47e" stop-opacity="0.32" />
+                <stop offset="45%" stop-color="#00d47e" stop-opacity="0.10" />
+                <stop offset="100%" stop-color="#00d47e" stop-opacity="0.0" />
+              </linearGradient>
+
+              <filter id="neonCurveGlow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="2.5" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+
+            <!-- Horizontal Guide Lines -->
+            <line
+              class="token-chart-grid"
+              x1={tokenChart.padding.left}
+              y1={topY}
+              x2={tokenChart.width - tokenChart.padding.right}
+              y2={topY}
+            />
+            <line
+              class="token-chart-grid mid"
+              x1={tokenChart.padding.left}
+              y1={midY}
+              x2={tokenChart.width - tokenChart.padding.right}
+              y2={midY}
+            />
+            <line
+              class="token-chart-grid"
+              x1={tokenChart.padding.left}
+              y1={bottomY}
+              x2={tokenChart.width - tokenChart.padding.right}
+              y2={bottomY}
+            />
+
+            <!-- Y Axis text labels -->
+            <text class="token-chart-y-label" x="4" y={topY + 4}>
+              {formatTokens(tokenHistoryMax)}
+            </text>
+            <text class="token-chart-y-label mid" x="4" y={midY + 4}>
+              {formatTokens(Math.round(tokenHistoryMax / 2))}
+            </text>
+            <text class="token-chart-y-label" x="30" y={bottomY + 4}>0</text>
+
+            <!-- Gradient Area Fill below curve -->
+            <path class="token-chart-smooth-area" d={smoothAreaPath} />
+
+            <!-- Smooth Bezier Spline Curve -->
+            <path class="token-chart-smooth-line" d={smoothCurvePath} />
+
+            <!-- Subtle Data Points -->
+            {#each tokenChartPoints as point (point.bucketStart)}
+              <circle
+                class="token-chart-point-subtle"
+                cx={point.x}
+                cy={point.y}
+                r="1.2"
+              />
+            {/each}
+
+            <!-- Interactive Hover Effects -->
+            {#if hoveredPoint}
+              <!-- Vertical Crosshair line -->
+              <line
+                class="hover-crosshair"
+                x1={hoveredPoint.x}
+                y1={topY}
+                x2={hoveredPoint.x}
+                y2={bottomY}
+              />
+
+              <!-- Outer Glowing Halo Ring -->
+              <circle
+                class="hover-halo"
+                cx={hoveredPoint.x}
+                cy={hoveredPoint.y}
+                r="4.5"
+              />
+
+              <!-- Inner Active Dot -->
+              <circle
+                class="hover-point-active"
+                cx={hoveredPoint.x}
+                cy={hoveredPoint.y}
+                r="2"
+              />
+
+              <!-- Interactive Floating Tooltip Bubble inside SVG -->
+              {@const tooltipWidth = 175}
+              {@const tooltipHeight = 46}
+              {@const tooltipX = Math.min(
+                tokenChart.width - tokenChart.padding.right - tooltipWidth,
+                Math.max(tokenChart.padding.left, hoveredPoint.x - tooltipWidth / 2)
+              )}
+              {@const tooltipY = Math.max(
+                4,
+                hoveredPoint.y - tooltipHeight - 12 < topY
+                  ? hoveredPoint.y + 14
+                  : hoveredPoint.y - tooltipHeight - 12
+              )}
+
+              <g class="chart-tooltip-group" transform={`translate(${tooltipX}, ${tooltipY})`}>
+                <rect
+                  class="chart-tooltip-bg"
+                  width={tooltipWidth}
+                  height={tooltipHeight}
+                  rx="6"
+                />
+                <text class="chart-tooltip-time" x="10" y="17">
+                  {hoveredPoint.detailLabel}
+                </text>
+                <text class="chart-tooltip-tokens" x="10" y="34">
+                  {formatTokens(hoveredPoint.totalTokens)} tokens
+                </text>
+              </g>
+            {/if}
+          </svg>
+        </div>
+
+        <div class="token-chart-axis">
+          {#each axisTicks as tick}
+            <span>{tick.label}</span>
+          {/each}
+        </div>
+      {:else}
+        <div class="token-chart-empty">
+          No token usage recorded in the selected time frame ({selectedTimeRange.toUpperCase()}).
+        </div>
+      {/if}
+    </section>
+
     <!-- Provider Quota Overview (Collapsible to save vertical space) -->
     <div class="section-container">
       <button
@@ -395,7 +957,9 @@
                       <input
                         type="checkbox"
                         checked={codexAccount.isDefault}
-                        disabled={!['available', 'busy', 'near_limit'].includes(codexAccount.status)}
+                        disabled={!['available', 'busy', 'near_limit'].includes(
+                          codexAccount.status
+                        )}
                         on:change={() => selectActiveAccount(codexAccount.id)}
                       />
                       active
@@ -904,6 +1468,190 @@
   }
   .warn-value {
     color: #e5a544;
+  }
+
+  /* Token history chart */
+  .token-history-card {
+    background: var(--bg2, #161c18);
+    border: 1px solid var(--bd, #27322b);
+    border-radius: 6px;
+    padding: 16px 20px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .token-history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .token-history-title-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .token-history-subtitle {
+    color: var(--t3, #5a6660);
+    font-size: 11px;
+  }
+  .token-history-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .time-range-group {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg1, #0f1412);
+    border: 1px solid var(--bd, #27322b);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .time-range-btn {
+    background: transparent;
+    border: none;
+    color: var(--t2, #8b9991);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+  .time-range-btn:hover {
+    color: var(--t0, #ffffff);
+    background: var(--bg3, #1d2520);
+  }
+  .time-range-btn.active {
+    color: #0f1412;
+    background: var(--ac, #00d47e);
+    font-weight: 600;
+  }
+  .token-stat-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .token-stat-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: var(--bg1, #0f1412);
+    border: 1px solid var(--bd, #27322b);
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+  .token-stat-chip .chip-label {
+    color: var(--t3, #5a6660);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+  .token-stat-chip.total .chip-val {
+    color: var(--ac, #00d47e);
+    font-weight: 600;
+  }
+  .token-stat-chip.peak .chip-val {
+    color: var(--t1, #c5d1cb);
+    font-weight: 500;
+  }
+  .token-chart-wrap {
+    width: 100%;
+    position: relative;
+    cursor: crosshair;
+  }
+  .token-chart {
+    display: block;
+    width: 100%;
+    height: 220px;
+    overflow: visible;
+  }
+  .token-chart-grid {
+    stroke: var(--bd, #27322b);
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
+  }
+  .token-chart-grid.mid {
+    stroke: rgba(39, 50, 43, 0.4);
+  }
+  .token-chart-y-label {
+    fill: var(--t3, #5a6660);
+    font-family: var(--mono);
+    font-size: 10px;
+  }
+  .token-chart-smooth-area {
+    fill: url(#tokenSmoothGradient);
+    transition: d 0.25s ease;
+  }
+  .token-chart-smooth-line {
+    fill: none;
+    stroke: var(--ac, #00d47e);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+    filter: url(#neonCurveGlow);
+    transition: d 0.25s ease;
+  }
+  .token-chart-point-subtle {
+    fill: var(--ac, #00d47e);
+    opacity: 0.35;
+    transition: opacity 0.2s ease;
+  }
+  .hover-crosshair {
+    stroke: rgba(0, 212, 126, 0.35);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+  }
+  .hover-halo {
+    fill: rgba(0, 212, 126, 0.2);
+    stroke: rgba(0, 212, 126, 0.6);
+    stroke-width: 0.8;
+  }
+  .hover-point-active {
+    fill: #ffffff;
+    stroke: var(--ac, #00d47e);
+    stroke-width: 1.2;
+  }
+  .chart-tooltip-bg {
+    fill: rgba(15, 20, 18, 0.95);
+    stroke: var(--bd, #27322b);
+    stroke-width: 1;
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.6));
+  }
+  .chart-tooltip-time {
+    fill: var(--t2, #8b9991);
+    font-family: var(--sans);
+    font-size: 9.5px;
+  }
+  .chart-tooltip-tokens {
+    fill: var(--ac, #00d47e);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .token-chart-axis {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 28px 0 52px;
+    color: var(--t3, #5a6660);
+    font-family: var(--mono);
+    font-size: 10px;
+  }
+  .token-chart-empty {
+    display: grid;
+    min-height: 140px;
+    place-items: center;
+    color: var(--t3, #5a6660);
+    font-size: 11.5px;
+    background: var(--bg1, #0f1412);
+    border: 1px dashed var(--bd, #27322b);
+    border-radius: 6px;
   }
 
   /* Scroll Area */

@@ -114,7 +114,7 @@
   <div class="hero">
     <div class="hero-copy">
       <span class="hero-kicker">mobile access</span>
-      <h2>Open Orbit on your phone with one guided flow.</h2>
+      <h2>Open Orbit-mode on your phone with one guided flow.</h2>
       <p>
         Turn on web access, scan the QR code on the same Wi-Fi network, and keep API management in
         the advanced section below.
@@ -148,14 +148,14 @@
         <div>
           <div class="card-title">Enable web access</div>
           <p class="card-copy">
-            Orbit needs its web server enabled before another device can join.
+            Orbit-mode needs its web server enabled before another device can join.
           </p>
         </div>
       </div>
 
       <div class="toggle-row">
         <div>
-          <label class="label" for="http-enabled">allow Orbit on other devices</label>
+          <label class="label" for="http-enabled">allow Orbit-mode on other devices</label>
           <div class="subtle">
             {#if baseUrl}
               current address: <code>{baseUrl}</code>
@@ -181,7 +181,7 @@
 
       {#if restartNeeded}
         <div class="info">
-          Restart Orbit before scanning on your phone. The web server changes only apply after
+        Restart Orbit-mode before scanning on your phone. The web server changes only apply after
           restart.
         </div>
       {/if}

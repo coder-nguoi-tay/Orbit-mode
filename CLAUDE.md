@@ -1,16 +1,16 @@
-# Orbit — CLAUDE.md
+# Orbit-mode — CLAUDE.md
 
 Guia de referência para o Claude Code trabalhar neste repositório.
 
 ---
 
-## O que é o Orbit
+## O que é o Orbit-mode
 
-Orbit é um **dashboard desktop para gerenciar múltiplas sessões de AI agents em paralelo**, construído com Tauri 2 (Rust + Svelte). Suporta Claude Code, Codex, OpenCode, Gemini CLI e Copilot CLI. Permite criar sessões, acompanhar output em tempo real, visualizar diffs de arquivos, tasks e tokens consumidos. Inclui um **servidor MCP embutido** que permite agentes externos criarem e monitorarem sessões via JSON-RPC.
+Orbit-mode é um **dashboard desktop para gerenciar múltiplas sessões de AI agents em paralelo**, construído com Tauri 2 (Rust + Svelte). Suporta Claude Code, Codex, OpenCode, Gemini CLI e Copilot CLI. Permite criar sessões, acompanhar output em tempo real, visualizar diffs de arquivos, tasks e tokens consumidos. Inclui um **servidor MCP embutido** que permite agentes externos criarem e monitorarem sessões via JSON-RPC.
 
 - Plataformas: **Windows 10 1903+**, **Ubuntu 22.04+** (e outras distros Linux com webkit2gtk 4.1), **macOS** (Intel e Apple Silicon)
 - Identificador: `com.josefernando.orbit`
-- Repositório: `github.com/xinnaider/orbit`
+- Repositório: `github.com/coder-nguoi-tay/Orbit-mode`
 
 ---
 

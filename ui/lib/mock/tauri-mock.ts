@@ -114,6 +114,7 @@ let mockHttpSettings = {
   enabled: true,
   host: '0.0.0.0',
   port: 9999,
+  restartRequired: false,
 };
 
 let mockApiKeys = [
@@ -870,7 +871,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     }
 
     case 'get_changelog':
-      return '# Changelog\n\n## April 2026\n\n### 04/07 · New — In-app changelog\nYou can now view the history of Orbit updates directly inside the app.';
+      return '# Changelog\n\n## April 2026\n\n### 04/07 · New — In-app changelog\nYou can now view the history of Orbit-mode updates directly inside the app.';
 
     case 'get_providers':
       return [
@@ -1005,6 +1006,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         enabled: Boolean(args?.enabled),
         host: String(args?.host ?? '127.0.0.1'),
         port: Number(args?.port ?? 9999),
+        restartRequired: true,
       };
       return null;
 
@@ -1125,6 +1127,10 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
             sessionCount: 4,
           },
         ],
+        tokenUsageHistory: Array.from({ length: 8 }, (_, index) => ({
+          bucketStart: new Date(Date.now() - (7 - index) * 3600 * 1000).toISOString(),
+          totalTokens: (index + 1) * 420000,
+        })),
       };
 
     case 'refresh_codex_quotas':
@@ -1145,6 +1151,27 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
           },
           updatedAt: new Date().toISOString(),
           source: 'app_server',
+        },
+      ];
+
+    case 'refresh_claude_quotas':
+      return [
+        {
+          provider: 'claude-code',
+          accountKey: 'default',
+          providerAccountId: null,
+          fiveHour: {
+            utilization: 0.35,
+            resetsAt: Math.floor(Date.now() / 1000) + 3 * 3600,
+            status: 'allowed',
+          },
+          sevenDay: {
+            utilization: 0.17,
+            resetsAt: Math.floor(Date.now() / 1000) + 5 * 24 * 3600,
+            status: 'allowed',
+          },
+          updatedAt: new Date().toISOString(),
+          source: 'cli_probe',
         },
       ];
 

@@ -1,4 +1,4 @@
-//! Pretty test reporter for Orbit's Rust tests.
+//! Pretty test reporter for Orbit-mode's Rust tests.
 //!
 //! Prints a formatted header on start, labels each assertion with ✓ or ✗,
 //! and prints a final PASSED / FAILED summary on drop.

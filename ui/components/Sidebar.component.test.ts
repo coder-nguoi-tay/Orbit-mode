@@ -298,7 +298,7 @@ describe('Sidebar', () => {
     const { getByText, getByTestId, queryByText } = render(Sidebar);
 
     expect(getByTestId('orbit-brand-icon')).toBeTruthy();
-    expect(getByText('orbit')).toBeTruthy();
+    expect(getByText('Tày')).toBeTruthy();
     expect(getByText('Recent sessions')).toBeTruthy();
     expect(getByText('Refactor billing flow')).toBeTruthy();
     expect(getByText('feature/auth')).toBeTruthy();

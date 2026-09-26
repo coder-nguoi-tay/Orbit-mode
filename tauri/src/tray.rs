@@ -34,7 +34,7 @@ pub fn sync_notify_menu_label(item: &MenuItem<tauri::Wry>) {
 }
 
 pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "tray-show", "Show Orbit", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "tray-show", "Show Orbit-mode", true, None::<&str>)?;
     let notify_toggle = MenuItem::with_id(
         app,
         "tray-toggle-notify",
@@ -42,7 +42,7 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let quit = MenuItem::with_id(app, "tray-quit", "Quit Orbit", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray-quit", "Quit Orbit-mode", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &notify_toggle, &quit])?;
 
     let notify_for_menu = notify_toggle.clone();
@@ -54,7 +54,7 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     let _tray = TrayIconBuilder::with_id("orbit-tray")
         .icon(icon)
         .menu(&menu)
-        .tooltip("Orbit")
+        .tooltip("Orbit-mode")
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
             let id = event.id().as_ref();

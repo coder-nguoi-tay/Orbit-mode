@@ -118,7 +118,7 @@
 
   function actorLabel(entry: JournalEntry): string {
     if (entry.entryType === 'user') return 'you';
-    if (entry.entryType === 'assistant') return `orbit / ${agentLabel}`;
+    if (entry.entryType === 'assistant') return `Orbit-mode / ${agentLabel}`;
     if (entry.entryType === 'toolCall') return 'tool';
     return entry.entryType;
   }
@@ -408,7 +408,7 @@
         <div class="timeline-node working"></div>
         <div class="timeline-body">
           <div class="event-meta">
-            <span class="event-actor working">orbit / {agentLabel}</span>
+            <span class="event-actor working">Orbit-mode / {agentLabel}</span>
           </div>
           <div class="working-pill" role="status" aria-live="polite">
             <span class="working-word">working</span>

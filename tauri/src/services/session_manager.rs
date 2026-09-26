@@ -152,7 +152,7 @@ fn build_account_handoff_packet(
         .take(4_000)
         .collect();
     format!(
-        "Continue this Orbit coding task in the same worktree. This is a new provider conversation after an account handoff. Inspect current files before editing.\n\nOriginal task:\n{task}\n\nWorktree: {worktree}\nBranch: {branch}\nGit status:\n{status}\nGit diff (bounded):\n{diff}\nRecent agent summary:\n{summary}\n\nContinue the outstanding work and verify changes."
+        "Continue this Orbit-mode coding task in the same worktree. This is a new provider conversation after an account handoff. Inspect current files before editing.\n\nOriginal task:\n{task}\n\nWorktree: {worktree}\nBranch: {branch}\nGit status:\n{status}\nGit diff (bounded):\n{diff}\nRecent agent summary:\n{summary}\n\nContinue the outstanding work and verify changes."
     )
 }
 
@@ -1977,40 +1977,59 @@ impl SessionManager {
         if matches!(provider_owned.as_str(), "codex" | "claude-code" | "claude")
             && !state.rate_limit.is_empty()
         {
-            let provider_account_id = self
-                .db
-                .get_session(session_id)
-                .ok()
-                .flatten()
-                .and_then(|session| session.provider_account_id);
-            let quota = crate::models::ProviderQuota {
-                provider: provider_owned.clone(),
-                account_key: provider_account_id
-                    .clone()
-                    .unwrap_or_else(|| "default".into()),
-                provider_account_id,
-                five_hour: state
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
+            let has_unexpired = state
+                .rate_limit
+                .iter()
+                .any(|l| l.resets_at.is_some_and(|r| r > now_epoch));
+
+            if has_unexpired {
+                let provider_account_id = self
+                    .db
+                    .get_session(session_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|session| session.provider_account_id);
+                let make_window =
+                    |limit: &crate::models::RateLimitInfo| -> Option<crate::models::QuotaWindow> {
+                        if limit.resets_at.is_some_and(|r| r <= now_epoch) {
+                            return None;
+                        }
+                        Some(crate::models::QuotaWindow {
+                            utilization: limit.utilization,
+                            resets_at: limit.resets_at,
+                            status: Some(limit.status.clone()),
+                        })
+                    };
+                let five = state
                     .rate_limit
                     .iter()
-                    .find(|limit| limit.rate_limit_type == "five_hour")
-                    .map(|limit| crate::models::QuotaWindow {
-                        utilization: limit.utilization,
-                        resets_at: limit.resets_at,
-                        status: Some(limit.status.clone()),
-                    }),
-                seven_day: state
+                    .find(|l| l.rate_limit_type == "five_hour")
+                    .and_then(make_window);
+                let seven = state
                     .rate_limit
                     .iter()
-                    .find(|limit| limit.rate_limit_type == "seven_day")
-                    .map(|limit| crate::models::QuotaWindow {
-                        utilization: limit.utilization,
-                        resets_at: limit.resets_at,
-                        status: Some(limit.status.clone()),
-                    }),
-                updated_at: chrono::Utc::now().to_rfc3339(),
-                source: "journal_replay".into(),
-            };
-            let _ = self.db.record_provider_quota(&quota);
+                    .find(|l| l.rate_limit_type == "seven_day")
+                    .and_then(make_window);
+                if five.is_some() || seven.is_some() {
+                    let quota = crate::models::ProviderQuota {
+                        provider: provider_owned.clone(),
+                        account_key: provider_account_id
+                            .clone()
+                            .unwrap_or_else(|| "default".into()),
+                        provider_account_id,
+                        five_hour: five,
+                        seven_day: seven,
+                        updated_at: chrono::Utc::now().to_rfc3339(),
+                        source: "journal_replay".into(),
+                    };
+                    let _ = self.db.record_provider_quota(&quota);
+                }
+            }
         }
 
         self.journal_states.insert(session_id, state);
@@ -2428,6 +2447,14 @@ mod tests {
         Arc::new(RwLock::new(SessionManager::new(make_db())))
     }
 
+    fn future_epoch(offset_secs: i64) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + offset_secs
+    }
+
     // ── init_session ─────────────────────────────────────────────────────
 
     #[test]
@@ -2732,14 +2759,16 @@ mod tests {
                 None,
             )
             .expect("session");
+        let future_5h = future_epoch(18_000);
+        let future_7d = future_epoch(604_800);
         let claude_line = serde_json::json!({
             "type": "rate_limit_event",
             "rate_limit_info": {
                 "status": "allowed",
                 "rateLimitType": "five_hour",
                 "unifiedWindows": {
-                    "five_hour": { "utilization": 0.27, "resetsAt": 1790359800i64 },
-                    "seven_day": { "utilization": 0.35, "resetsAt": 1790845200i64 }
+                    "five_hour": { "utilization": 0.27, "resetsAt": future_5h },
+                    "seven_day": { "utilization": 0.35, "resetsAt": future_7d }
                 }
             }
         });
@@ -2773,6 +2802,8 @@ mod tests {
     /// @since 2026-09-26
     #[test]
     fn should_prefer_active_claude_quota_over_replayed_snapshot() {
+        let future_5h = future_epoch(18_000);
+        let future_5h_later = future_epoch(36_000);
         let db = make_db();
         db.record_provider_quota(&crate::models::ProviderQuota {
             provider: "claude-code".into(),
@@ -2780,7 +2811,7 @@ mod tests {
             provider_account_id: None,
             five_hour: Some(crate::models::QuotaWindow {
                 utilization: 0.11,
-                resets_at: Some(1790359800),
+                resets_at: Some(future_5h),
                 status: Some("allowed".into()),
             }),
             seven_day: None,
@@ -2800,7 +2831,7 @@ mod tests {
                     status: "allowed".into(),
                     rate_limit_type: "five_hour".into(),
                     utilization: 0.44,
-                    resets_at: Some(1790375400),
+                    resets_at: Some(future_5h_later),
                     is_using_overage: false,
                     surpassed_threshold: 0.0,
                 }],

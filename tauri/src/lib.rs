@@ -27,6 +27,11 @@ use tauri::{Listener, Manager};
 use tokio::sync::broadcast;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Initialize the desktop application, including the embedded HTTP server.
+///
+/// @return No value; Tauri owns the application event loop after initialization.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 pub fn run() {
     let mut builder = tauri::Builder::default();
 
@@ -183,6 +188,10 @@ pub fn run() {
                             eprintln!("[orbit:http] server error: {e}");
                         }
                     });
+                } else if let Err(error) = db_ref.set_http_setting("restart_required", "false") {
+                    eprintln!(
+                        "[orbit:http] failed to clear disabled-server restart marker: {error}"
+                    );
                 }
             }
 
@@ -237,6 +246,23 @@ pub fn run() {
                 }
                 // Transparent windows need shadow off on Windows when using effects/opacity.
                 let _ = window.set_shadow(true);
+
+                // Auto-fit window to 80% of screen dimensions and center on monitor
+                if let Some(monitor) = window
+                    .current_monitor()
+                    .ok()
+                    .flatten()
+                    .or_else(|| window.primary_monitor().ok().flatten())
+                {
+                    let size = monitor.size();
+                    let target_width = (size.width as f64 * 0.80).round() as u32;
+                    let target_height = (size.height as f64 * 0.80).round() as u32;
+                    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                        width: target_width,
+                        height: target_height,
+                    }));
+                    let _ = window.center();
+                }
             }
 
             tray::setup(app.handle())?;
@@ -295,6 +321,7 @@ pub fn run() {
             commands::stats::get_usage_overview,
             commands::stats::get_provider_quotas,
             commands::stats::refresh_codex_quotas,
+            commands::stats::refresh_claude_quotas,
             commands::stats::get_session_usages,
             commands::accounts::get_provider_accounts,
             commands::accounts::create_codex_account,

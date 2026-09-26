@@ -207,12 +207,12 @@
   </div>
 {/if}
 
-<!-- API Key info alert: config via CLI, not in Orbit -->
+<!-- API Key info alert: config via CLI, not in Orbit-mode -->
 <div class="alert-info">
   <span class="alert-icon">ⓘ</span>
   <span>
     Configure your API directly in the matching CLI (<strong>OpenCode</strong>,
-    <strong>Claude Code</strong>, etc.). Orbit will use the credentials already set up in your
+    <strong>Claude Code</strong>, etc.). Orbit-mode will use the credentials already set up in your
     terminal.
   </span>
 </div>

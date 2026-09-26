@@ -229,7 +229,8 @@
             confirmDelete = null;
             await deleteSession(id);
             sessions.update((l) => l.filter((s) => s.id !== id));
-          }}>delete</button>
+          }}>delete</button
+        >
       </div>
     </div>
   </div>
@@ -271,7 +272,7 @@
   <header class="header quiet-header">
     <div class="brand">
       <span class="brand-logo" data-testid="orbit-brand-icon">{@html OrbitLogo}</span>
-      <span class="brand-name">orbit</span>
+      <span class="brand-name">Tày</span>
       {#if appVersion}
         <button class="brand-version" on:click={onOpenChangelog} title="What's new">
           v{appVersion}
@@ -301,7 +302,8 @@
         class="collapse-btn"
         on:click={() => sidebarVisible.set(false)}
         title="Hide sidebar ({sidebarToggleHint()})"
-        aria-label="Hide sidebar">‹</button>
+        aria-label="Hide sidebar">‹</button
+      >
     </div>
   </header>
 
@@ -447,8 +449,8 @@
     font-size: var(--md);
     font-weight: 600;
     color: var(--t0);
-    letter-spacing: 0.12em;
-    text-transform: lowercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
   }
   .brand-version {
     font-size: 10px;

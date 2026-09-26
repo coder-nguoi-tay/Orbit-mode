@@ -61,7 +61,7 @@
           value={$windowOpacity}
           oninput={(e) => windowOpacity.set(Number(e.currentTarget.value))}
         />
-        <p class="opacity-hint">See through the window behind Orbit. Works with any theme.</p>
+        <p class="opacity-hint">See through the window behind Orbit-mode. Works with any theme.</p>
       </div>
     </div>
   {/if}

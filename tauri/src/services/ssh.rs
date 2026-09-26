@@ -1,4 +1,4 @@
-/// SSH utilities for Orbit: askpass helpers, host/user validation, connection testing,
+/// SSH utilities for Orbit-mode: askpass helpers, host/user validation, connection testing,
 /// and spawning remote commands via SSH tunnel.
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -142,7 +142,7 @@ pub struct SshTestResult {
 // ── SSH options helpers ───────────────────────────────────────────────────────
 
 /// Appends the baseline SSH `-o` options that are common to all SSH invocations
-/// made by Orbit.
+/// made by Orbit-mode.
 fn push_base_options(args: &mut Vec<String>) {
     let opts: &[&str] = &[
         "ConnectTimeout=10",
