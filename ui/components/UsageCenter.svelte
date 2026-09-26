@@ -492,25 +492,68 @@
     return points;
   })();
 
-  /** Catmull-Rom to Cubic Bezier smooth spline generator */
+  /** Monotone Cubic Spline (Fritsch-Carlson) - smooth curves without negative undershoot */
   function generateSmoothPath(points: Array<{ x: number; y: number }>): string {
-    if (points.length === 0) return '';
-    if (points.length === 1) return `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
-    if (points.length === 2) {
+    const n = points.length;
+    if (n === 0) return '';
+    if (n === 1) return `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+    if (n === 2) {
       return `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)} L ${points[1].x.toFixed(2)},${points[1].y.toFixed(2)}`;
     }
 
+    const baselineY = tokenChart.height - tokenChart.padding.bottom;
+    const topY = tokenChart.padding.top;
+
+    // 1. Calculate secants (slopes between consecutive points)
+    const deltas: number[] = [];
+    const dxs: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = points[i + 1].x - points[i].x;
+      const dy = points[i + 1].y - points[i].y;
+      dxs.push(dx);
+      deltas.push(dx !== 0 ? dy / dx : 0);
+    }
+
+    // 2. Calculate initial tangents
+    const m: number[] = new Array(n).fill(0);
+    m[0] = deltas[0];
+    m[n - 1] = deltas[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      if (deltas[i - 1] * deltas[i] <= 0) {
+        m[i] = 0;
+      } else {
+        m[i] = (deltas[i - 1] + deltas[i]) / 2;
+      }
+    }
+
+    // 3. Fritsch-Carlson monotonicity constraint
+    for (let i = 0; i < n - 1; i++) {
+      if (Math.abs(deltas[i]) < 1e-9) {
+        m[i] = 0;
+        m[i + 1] = 0;
+      } else {
+        const alpha = m[i] / deltas[i];
+        const beta = m[i + 1] / deltas[i];
+        const dist = alpha * alpha + beta * beta;
+        if (dist > 9) {
+          const tau = 3 / Math.sqrt(dist);
+          m[i] = tau * alpha * deltas[i];
+          m[i + 1] = tau * beta * deltas[i];
+        }
+      }
+    }
+
+    // 4. Build cubic bezier SVG path with boundary clamping
     let path = `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
-    for (let i = 0; i < points.length - 1; i++) {
-      const p0 = points[Math.max(0, i - 1)];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = dxs[i];
       const p1 = points[i];
       const p2 = points[i + 1];
-      const p3 = points[Math.min(points.length - 1, i + 2)];
 
-      const cp1x = p1.x + (p2.x - p0.x) / 6;
-      const cp1y = p1.y + (p2.y - p0.y) / 6;
-      const cp2x = p2.x - (p3.x - p1.x) / 6;
-      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      const cp1x = p1.x + dx / 3;
+      const cp1y = Math.max(topY, Math.min(baselineY, p1.y + (m[i] * dx) / 3));
+      const cp2x = p2.x - dx / 3;
+      const cp2y = Math.max(topY, Math.min(baselineY, p2.y - (m[i + 1] * dx) / 3));
 
       path += ` C ${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
     }
@@ -528,8 +571,13 @@
 
   function handleChartMouseMove(event: MouseEvent) {
     if (!svgElement || tokenChartPoints.length === 0) return;
-    const rect = svgElement.getBoundingClientRect();
-    const mouseSvgX = ((event.clientX - rect.left) / rect.width) * tokenChart.width;
+    const ctm = svgElement.getScreenCTM();
+    if (!ctm) return;
+    const pt = svgElement.createSVGPoint();
+    pt.x = event.clientX;
+    pt.y = event.clientY;
+    const svgPoint = pt.matrixTransform(ctm.inverse());
+    const mouseSvgX = svgPoint.x;
 
     let closestIdx = 0;
     let closestDist = Infinity;
@@ -715,6 +763,7 @@
             bind:this={svgElement}
             class="token-chart"
             viewBox={`0 0 ${tokenChart.width} ${tokenChart.height}`}
+            preserveAspectRatio="none"
             role="img"
             aria-label="Token usage chart"
             on:mousemove={handleChartMouseMove}
@@ -774,14 +823,13 @@
             <!-- Smooth Bezier Spline Curve -->
             <path class="token-chart-smooth-line" d={smoothCurvePath} />
 
-            <!-- Discrete Checkpoint Data Points -->
+            <!-- Subtle Data Points -->
             {#each tokenChartPoints as point (point.bucketStart)}
               <circle
                 class="token-chart-point-subtle"
-                class:has-tokens={point.totalTokens > 0}
                 cx={point.x}
                 cy={point.y}
-                r={point.totalTokens > 0 ? 3 : 1.5}
+                r="1.2"
               />
             {/each}
 
@@ -801,7 +849,7 @@
                 class="hover-halo"
                 cx={hoveredPoint.x}
                 cy={hoveredPoint.y}
-                r="7"
+                r="4.5"
               />
 
               <!-- Inner Active Dot -->
@@ -809,7 +857,7 @@
                 class="hover-point-active"
                 cx={hoveredPoint.x}
                 cy={hoveredPoint.y}
-                r="3.5"
+                r="2"
               />
 
               <!-- Interactive Floating Tooltip Bubble inside SVG -->
@@ -1546,36 +1594,29 @@
     stroke: var(--ac, #00d47e);
     stroke-linecap: round;
     stroke-linejoin: round;
-    stroke-width: 2.5;
+    stroke-width: 1.8;
     filter: url(#neonCurveGlow);
     transition: d 0.25s ease;
   }
   .token-chart-point-subtle {
-    fill: var(--bg1, #0f1412);
-    stroke: var(--ac, #00d47e);
-    stroke-width: 1.5;
-    opacity: 0.4;
-    transition: all 0.2s ease;
-  }
-  .token-chart-point-subtle.has-tokens {
-    opacity: 1;
-    fill: #00ff94;
-    stroke: #00ff94;
+    fill: var(--ac, #00d47e);
+    opacity: 0.35;
+    transition: opacity 0.2s ease;
   }
   .hover-crosshair {
-    stroke: rgba(0, 212, 126, 0.4);
+    stroke: rgba(0, 212, 126, 0.35);
     stroke-width: 1;
     stroke-dasharray: 3 3;
   }
   .hover-halo {
-    fill: rgba(0, 212, 126, 0.25);
+    fill: rgba(0, 212, 126, 0.2);
     stroke: rgba(0, 212, 126, 0.6);
-    stroke-width: 1;
+    stroke-width: 0.8;
   }
   .hover-point-active {
     fill: #ffffff;
     stroke: var(--ac, #00d47e);
-    stroke-width: 2;
+    stroke-width: 1.2;
   }
   .chart-tooltip-bg {
     fill: rgba(15, 20, 18, 0.95);
