@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessions, updateSessionState } from '../lib/stores/sessions';
+  import { sessions, updateSessionState, type Session } from '../lib/stores/sessions';
   import { upsertAndOpenSession } from '../lib/stores/session-actions';
   import NewSessionModal from './NewSessionModal.svelte';
   import ContextMenu from './ContextMenu.svelte';
@@ -17,6 +17,7 @@
   import { sidebarVisible } from '../lib/stores/preferences';
   import { sidebarToggleHint } from '../lib/shortcuts';
   import { Activity, Settings } from 'lucide-svelte';
+  import { get } from 'svelte/store';
   import { usageCenterOpen } from '../lib/stores/usage';
   import { pipelines, activePipelineId, openPipeline } from '../lib/stores/pipelines';
   import PipelineCreateDialog from './PipelineCreateDialog.svelte';
@@ -88,17 +89,35 @@
     });
   }
 
-  // Auto-expand parents when MCP child sessions appear
+  let childrenByParent = new Map<number, Session[]>();
+  const observedParentIds = new Set<number>();
+
+  // Index children once per sessions-store update instead of filtering the
+  // complete session list separately inside every recursive row.
   $: {
-    const parentIds = $sessions
-      .map((s) => s.parentSessionId)
-      .filter((id): id is number => id != null);
-    if (parentIds.length > 0) {
-      expandedParentSessions.update((set) => {
-        const next = new Set([...set, ...parentIds]);
-        return next.size === set.size ? set : next;
-      });
+    const nextChildrenByParent = new Map<number, Session[]>();
+    for (const currentSession of $sessions) {
+      const parentId = currentSession.parentSessionId;
+      if (parentId == null) continue;
+      const children = nextChildrenByParent.get(parentId);
+      if (children) children.push(currentSession);
+      else nextChildrenByParent.set(parentId, [currentSession]);
     }
+    childrenByParent = nextChildrenByParent;
+
+    // Auto-expand only newly observed parents. Calling update() with the same
+    // Set still notifies Svelte subscribers because Set is an object.
+    const newlyObservedParentIds = [...nextChildrenByParent.keys()].filter(
+      (id) => !observedParentIds.has(id)
+    );
+    if (newlyObservedParentIds.length > 0) {
+      const expanded = get(expandedParentSessions);
+      const missingParentIds = newlyObservedParentIds.filter((id) => !expanded.has(id));
+      if (missingParentIds.length > 0) {
+        expandedParentSessions.set(new Set([...expanded, ...missingParentIds]));
+      }
+    }
+    for (const parentId of nextChildrenByParent.keys()) observedParentIds.add(parentId);
   }
 
   // Context menu state
@@ -346,6 +365,7 @@
           <SessionListItem
             session={s}
             pinned
+            {childrenByParent}
             expandedParents={$expandedParentSessions}
             onToggleExpand={toggleExpand}
             {onContextMenu}
@@ -372,6 +392,7 @@
         {#each recentList as s (s.id)}
           <SessionListItem
             session={s}
+            {childrenByParent}
             expandedParents={$expandedParentSessions}
             onToggleExpand={toggleExpand}
             {onContextMenu}

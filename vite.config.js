@@ -7,6 +7,13 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
+  // Rebuild the Svelte runtime prebundle on each dev-server start. Tauri's
+  // long-lived WebView can otherwise retain a dependency chunk from a prior
+  // HMR session and run teardown code against a different runtime instance.
+  optimizeDeps: {
+    force: true,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

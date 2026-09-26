@@ -12,7 +12,7 @@
   export let focused: boolean = true;
 
   const dispatch = createEventDispatcher<{
-    addaction: { action: 'terminal' | 'git' };
+    addaction: { action: 'terminal' | 'git' | 'files' };
   }>();
 
   let menuOpen = false;
@@ -36,7 +36,7 @@
     menuOpen = true;
   }
 
-  function handleMenuSelect(e: CustomEvent<{ action: 'terminal' | 'git' }>) {
+  function handleMenuSelect(e: CustomEvent<{ action: 'terminal' | 'git' | 'files' }>) {
     dispatch('addaction', { action: e.detail.action });
   }
 

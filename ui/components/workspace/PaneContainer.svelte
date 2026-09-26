@@ -17,6 +17,7 @@
   import CentralPanel from '../CentralPanel.svelte';
   import GitPanel from '../GitPanel.svelte';
   import TerminalPanel from '../TerminalPanel.svelte';
+  import FileEditorPanel from '../FileEditorPanel.svelte';
 
   export let paneId: string;
 
@@ -126,18 +127,30 @@
     return null;
   }
 
-  // TEMPORARILY DISABLED: Terminal and Git overview tabs are turned off for now
-  // (we are shipping chats only). The add menu shows them greyed out and never
-  // dispatches, but we gate here too. Flip to `false` to bring both tabs back.
-  const TABS_DISABLED: boolean = true;
+  /** Open a utility tab or split a terminal beside the active session.
+   * @param action Utility tab requested from the tab menu.
+   * @return No value.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
+  function handleAddAction(action: 'terminal' | 'git' | 'files') {
+    const cwdFromTarget = (t: (typeof activeTab)['target'] | undefined) => {
+      if (!t) return '.';
+      if (t.kind === 'git' || t.kind === 'terminal' || t.kind === 'files') return t.cwd;
+      return '.';
+    };
+    const cwd = session?.cwd ?? cwdFromTarget(activeTab?.target);
 
-  function handleAddAction(action: 'terminal' | 'git') {
-    if (TABS_DISABLED) return;
-    const cwd = session?.cwd ?? (activeTab?.target.kind === 'git' ? activeTab.target.cwd : '.');
+    if (action === 'files') {
+      addTab(paneId, { kind: 'files', cwd: cwd || '.' });
+      return;
+    }
     if (action === 'terminal') {
-      addTab(paneId, { kind: 'terminal', terminalId: crypto.randomUUID(), cwd });
-    } else if (action === 'git') {
-      addTab(paneId, { kind: 'git', cwd });
+      splitPane(
+        paneId,
+        'horizontal',
+        createTab({ kind: 'terminal', terminalId: crypto.randomUUID(), cwd: cwd || '.' })
+      );
     }
   }
 </script>
@@ -174,6 +187,12 @@
     {:else if activeTab?.target.kind === 'terminal'}
       <TerminalPanel
         terminalId={activeTab.target.terminalId}
+        cwd={activeTab.target.cwd}
+        focused={isFocused}
+        onClose={() => closeTab(paneId, activeTab.id)}
+      />
+    {:else if activeTab?.target.kind === 'files'}
+      <FileEditorPanel
         cwd={activeTab.target.cwd}
         focused={isFocused}
         onClose={() => closeTab(paneId, activeTab.id)}

@@ -1154,27 +1154,6 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         },
       ];
 
-    case 'refresh_claude_quotas':
-      return [
-        {
-          provider: 'claude-code',
-          accountKey: 'default',
-          providerAccountId: null,
-          fiveHour: {
-            utilization: 0.35,
-            resetsAt: Math.floor(Date.now() / 1000) + 3 * 3600,
-            status: 'allowed',
-          },
-          sevenDay: {
-            utilization: 0.17,
-            resetsAt: Math.floor(Date.now() / 1000) + 5 * 24 * 3600,
-            status: 'allowed',
-          },
-          updatedAt: new Date().toISOString(),
-          source: 'cli_probe',
-        },
-      ];
-
     case 'get_provider_quotas':
       return [
         {

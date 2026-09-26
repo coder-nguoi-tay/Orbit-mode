@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import type { ProviderQuota, SessionUsageSnapshot, UsageOverview } from '../types';
-import { getUsageOverview, refreshCodexQuotas, refreshClaudeQuotas } from '../tauri/usage';
+import { getUsageOverview, refreshCodexQuotas } from '../tauri/usage';
 import { onSessionUsageUpdated, onProviderQuotaUpdated } from '../tauri/events';
 
 export const usageOverview = writable<UsageOverview | null>(null);
@@ -56,14 +56,25 @@ function applyQuotas(incoming: ProviderQuota[]) {
   });
 }
 
-/** Live CLI read. Never awaited by callers: it shells out to the Codex CLI and must not
- * delay the usage overview, which renders fine from persisted data alone. */
+/** Live Codex read without starting a Codex turn.
+ *
+ * @return No value; the provider quota store is updated when the read completes.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-26
+ */
 function readLiveCodexQuotas(): void {
   refreshCodexQuotas()
     .then(applyQuotas)
     .catch((err) => console.error('Failed to read live Codex quotas:', err));
 }
 
+/** Refresh persisted usage and safe provider quota sources.
+ * Claude quota is intentionally not probed by starting a CLI prompt because that consumes quota.
+ *
+ * @return Promise resolved after the persisted usage overview is loaded.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-26
+ */
 export async function refreshUsageOverview() {
   isUsageLoading.set(true);
   try {
@@ -80,9 +91,6 @@ export async function refreshUsageOverview() {
   // Started only after the persisted baseline is in place, so the live sample merges
   // on top of it instead of racing the `set` above.
   readLiveCodexQuotas();
-  refreshClaudeQuotas()
-    .then(applyQuotas)
-    .catch((err) => console.error('Failed to read live Claude quotas:', err));
 }
 
 /** Start one shared subscription for account quota and session usage events.

@@ -31,6 +31,8 @@
   let textarea: HTMLTextAreaElement;
   let commands: SlashCommand[] = [];
   let files: string[] = [];
+  let loadedFilesCwd = '';
+  let loadingFilesCwd: string | null = null;
   let picker: SlashCommandPicker;
   let interrupting = false;
 
@@ -346,14 +348,6 @@ If the user provides neither role nor name nor mission, ask one concise question
     if (textarea) textarea.style.height = 'auto';
   }
 
-  let prevCwd = '';
-  $: if (cwd && cwd !== prevCwd) {
-    prevCwd = cwd;
-    listProjectFiles(cwd)
-      .then((f) => (files = f))
-      .catch((e) => console.warn('[InputBar] listProjectFiles failed:', e));
-  }
-
   // atQuery: compute the @ file query from current cursor position
   function computeAtQuery(): string | null {
     if (!textarea) return null;
@@ -370,6 +364,43 @@ If the user provides neither role nor name nor mission, ask one concise question
     void text;
     return computeAtQuery();
   })();
+
+  /** Load file names only after the user opens @-file completion.
+   * @param targetCwd Absolute project path whose file names are needed.
+   * @return Completion after the lazy file-name lookup finishes.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
+  async function loadFilesForPicker(targetCwd: string): Promise<void> {
+    if (!targetCwd || loadedFilesCwd === targetCwd || loadingFilesCwd === targetCwd) return;
+
+    loadingFilesCwd = targetCwd;
+    try {
+      const nextFiles = await listProjectFiles(targetCwd);
+      if (cwd === targetCwd) files = nextFiles;
+    } catch (e) {
+      if (cwd === targetCwd) {
+        files = [];
+        console.warn('[InputBar] listProjectFiles failed:', e);
+      }
+    } finally {
+      if (cwd === targetCwd) loadedFilesCwd = targetCwd;
+      if (loadingFilesCwd === targetCwd) loadingFilesCwd = null;
+    }
+  }
+
+  let prevCwd = '';
+  $: if (cwd !== prevCwd) {
+    prevCwd = cwd;
+    files = [];
+    loadedFilesCwd = '';
+  }
+
+  // Do not scan a project while merely opening its session. File names are
+  // only needed when the user explicitly starts an @-file completion.
+  $: if (aq !== null && cwd) {
+    void loadFilesForPicker(cwd);
+  }
 
   // Whether any picker dropdown is active (for keyboard handling)
   $: pickerVisible = text.startsWith('/') || aq !== null;

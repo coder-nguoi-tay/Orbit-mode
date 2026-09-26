@@ -42,10 +42,16 @@
     };
 
     const rejectionHandler = (event: PromiseRejectionEvent) => {
-      console.error('[Orbit-mode Debug Catcher] Unhandled Rejection:', event);
       const reason = event.reason;
+      const msg = reason instanceof Error ? reason.message : String(reason);
+      // Monaco worker sends these for languages without a dedicated language worker — harmless
+      if (msg.startsWith('Missing requestHandler or method:')) {
+        event.preventDefault();
+        return;
+      }
+      console.error('[Orbit-mode Debug Catcher] Unhandled Rejection:', event);
       uncaughtError = {
-        message: reason instanceof Error ? reason.message : String(reason),
+        message: msg,
         stack: reason instanceof Error ? reason.stack : undefined,
       };
     };

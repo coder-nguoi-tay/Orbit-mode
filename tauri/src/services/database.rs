@@ -1226,7 +1226,8 @@ impl DatabaseService {
         let mut stmt = conn.prepare(
             "SELECT provider, account_key, provider_account_id, window_type, utilization, reset_at, status, source, created_at
              FROM provider_quota_snapshots
-             WHERE reset_at IS NULL OR reset_at > unixepoch()
+             WHERE source != 'cli_probe'
+               AND (reset_at IS NULL OR reset_at > unixepoch())
              ORDER BY id DESC",
         )?;
         let mut map: std::collections::HashMap<(String, String), crate::models::ProviderQuota> =
@@ -2277,8 +2278,24 @@ mod tests {
                 })
                 .unwrap();
         }
+        database
+            .record_provider_quota(&crate::models::ProviderQuota {
+                provider: "claude-code".into(),
+                account_key: "default".into(),
+                provider_account_id: None,
+                five_hour: Some(crate::models::QuotaWindow {
+                    utilization: 0.35,
+                    resets_at: None,
+                    status: Some("allowed".into()),
+                }),
+                seven_day: None,
+                updated_at: now.clone(),
+                source: "cli_probe".into(),
+            })
+            .unwrap();
         let quotas = database.get_latest_provider_quotas().unwrap();
         assert_eq!(quotas.len(), 2);
+        assert!(quotas.iter().all(|quota| quota.provider != "claude-code"));
         assert!(quotas.iter().any(|quota| {
             quota.provider_account_id.as_deref() == Some("profile-a")
                 && quota.five_hour.as_ref().unwrap().utilization == 0.72

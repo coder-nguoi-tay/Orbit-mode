@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import type { Session } from '../lib/stores/sessions';
   import { journal, pendingMessages } from '../lib/stores/journal';
   import { backends as backendsStore } from '../lib/stores/providers';
@@ -26,21 +27,29 @@
   let feedComponent: Feed;
   let atBottom = true;
 
-  // Load DB history once on mount
-  async function loadHistory(id: number) {
+  /** Load one session's journal once and cache empty histories as well.
+   * @param id Session whose history is being opened.
+   * @return Completion after the journal cache has been checked or populated.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
+  async function loadHistory(id: number): Promise<void> {
+    if (get(journal).has(id)) return;
     try {
       const entries = await getSessionJournal(id);
-      if (entries.length > 0) {
-        journal.update((m) => new Map(m).set(id, entries));
-      }
+      journal.update((m) => (m.has(id) ? m : new Map(m).set(id, entries)));
     } catch (_e) {
       /* no-op */
     }
   }
 
-  // Auto-detect git branch if not set yet
-  async function fetchBranch() {
-    if (!session.cwd) return;
+  /** Read a session's Git branch only when the session has no cached branch.
+   * @return Completion after the branch is read or the repository is skipped.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
+  async function fetchBranch(): Promise<void> {
+    if (!session.cwd || session.gitBranch) return;
     try {
       const branch = await invoke<string | null>('git_branch', { cwd: session.cwd });
       if (branch && (session.gitBranch ?? null) !== branch) {
@@ -175,7 +184,13 @@
       {#each $pendingMessages as msg (msg.id)}
         <div class="pending-msg">
           <span class="pending-arrow">›</span>
-          <span>{msg.text}</span>
+          <div class="pending-body">
+            <div class="pending-meta">
+              <span class="pending-tag">YOU</span>
+              <span class="pending-status">sending...</span>
+            </div>
+            <span class="pending-text">{msg.text}</span>
+          </div>
         </div>
       {/each}
     {/if}
@@ -253,18 +268,74 @@
 
   .pending-msg {
     display: flex;
-    gap: var(--sp-4);
+    gap: 12px;
     align-items: flex-start;
-    padding: var(--sp-4) var(--sp-7) var(--sp-4) var(--sp-5);
-    font-size: var(--base);
-    color: var(--t1);
-    opacity: 0.6;
-    border-left: 2px solid var(--user-fg);
-    margin: var(--sp-1) 0;
+    padding: 10px 14px;
+    margin: 8px 24px;
+    background: linear-gradient(135deg, rgba(79, 146, 247, 0.08) 0%, rgba(79, 146, 247, 0.02) 100%);
+    border: 1px solid rgba(79, 146, 247, 0.22);
+    border-left: 3px solid var(--user-fg, #4f92f7);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    font-family: var(--font-mono, var(--mono), monospace);
+    animation: pendingPulse 2.5s ease-in-out infinite;
   }
   .pending-arrow {
-    color: var(--user-fg);
+    color: var(--user-fg, #4f92f7);
+    font-weight: 700;
+    font-size: 15px;
+    line-height: 1.2;
     flex-shrink: 0;
+    margin-top: 2px;
+    text-shadow: 0 0 8px rgba(79, 146, 247, 0.5);
+  }
+  .pending-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+  .pending-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pending-tag {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--user-fg, #4f92f7);
+    background: rgba(79, 146, 247, 0.14);
+    border: 1px solid rgba(79, 146, 247, 0.28);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .pending-status {
+    font-size: 9.5px;
+    font-family: var(--mono);
+    color: var(--t2, #8b9991);
+    opacity: 0.7;
+    letter-spacing: 0.02em;
+  }
+  .pending-text {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--t0, #ffffff);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-weight: 500;
+  }
+  @keyframes pendingPulse {
+    0%, 100% {
+      border-color: rgba(79, 146, 247, 0.22);
+      border-left-color: var(--user-fg, #4f92f7);
+    }
+    50% {
+      border-color: rgba(79, 146, 247, 0.45);
+      border-left-color: #70a7ff;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25), 0 0 14px rgba(79, 146, 247, 0.1);
+    }
   }
 
   .scroll-btn {
