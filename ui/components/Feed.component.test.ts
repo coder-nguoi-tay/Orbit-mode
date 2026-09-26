@@ -109,6 +109,34 @@ describe('Feed', () => {
     expect(events.length).toBe(0);
   });
 
+  it('observes only the timeline and viewport for content resizing', () => {
+    const originalResizeObserver = globalThis.ResizeObserver;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    globalThis.ResizeObserver = class {
+      observe = observe;
+      disconnect = disconnect;
+      unobserve = vi.fn();
+    } as unknown as typeof ResizeObserver;
+
+    try {
+      const renderedFeed = render(Feed, {
+        props: {
+          entries: [makeEntry({ entryType: 'assistant', text: 'hello' })],
+          status: '',
+          provider: 'claude-code',
+          cwd: null,
+        },
+      });
+
+      expect(observe).toHaveBeenCalledTimes(2);
+      renderedFeed.unmount();
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver;
+    }
+  });
+
   it('renders user entry', () => {
     const entries = [makeEntry({ entryType: 'user', text: 'hello from user' })];
     const { container } = render(Feed, {
@@ -142,7 +170,34 @@ describe('Feed', () => {
     });
 
     expect(getByText('working')).toBeTruthy();
+    expect(container.textContent).toContain('· 0s');
     expect(container.querySelector('.typing-dots')).toBeTruthy();
+  });
+
+  it('streams only an assistant response appended after the initial history', async () => {
+    const initialEntry = makeEntry({ entryType: 'user', text: 'question', seq: 1 });
+    const assistantEntry = makeEntry({
+      entryType: 'assistant',
+      text: 'This newly appended response should reveal progressively.',
+      seq: 2,
+    });
+    const renderedFeed = render(Feed, {
+      props: {
+        entries: [initialEntry],
+        status: 'working',
+        provider: 'codex',
+        cwd: null,
+      },
+    });
+
+    await renderedFeed.rerender({
+      entries: [initialEntry, assistantEntry],
+      status: 'waiting',
+      provider: 'codex',
+      cwd: null,
+    });
+
+    expect(renderedFeed.container.querySelector('.stream-caret')).toBeTruthy();
   });
 
   it('hides typing indicator when status is running or waiting', () => {
@@ -153,6 +208,14 @@ describe('Feed', () => {
       expect(container.querySelector('.timeline-event.working')).toBeNull();
       cleanup();
     }
+  });
+
+  it('shows typing indicator while Claude CLI is running before its first output', () => {
+    const { container } = render(Feed, {
+      props: { entries: [], status: 'running', provider: 'claude-code', cwd: null },
+    });
+
+    expect(container.querySelector('.timeline-event.working')).toBeTruthy();
   });
 
   it('renders toolCall entry', () => {

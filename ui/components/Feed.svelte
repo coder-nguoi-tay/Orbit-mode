@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, tick, createEventDispatcher } from 'svelte';
   import type { JournalEntry } from '../lib/types';
   import Markdown from './Markdown.svelte';
   import ToolCallEntry from './ToolCallEntry.svelte';
@@ -23,7 +23,91 @@
 
   const dispatch = createEventDispatcher<{ bottomchange: { atBottom: boolean } }>();
 
-  $: isWorking = status === 'working' || status === 'input';
+  $: isWorking =
+    status === 'working' ||
+    status === 'input' ||
+    (provider === 'claude-code' && status === 'running');
+
+  let workingElapsedSeconds = 0;
+  let workingStartedAt = 0;
+  let workingTimer: ReturnType<typeof setInterval> | null = null;
+  let feedMounted = false;
+  let knownEntryCount = entries.length;
+  let knownLastEntryIdentity = entries.length > 0 ? entryIdentity(entries[entries.length - 1]) : '';
+  let streamingAssistantIdentity = '';
+
+  /** Build a stable identity for detecting entries appended after initial history load.
+   * @param entry Journal entry whose provider sequence identifies it within this feed.
+   * @return Stable epoch, sequence and type key.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function entryIdentity(entry: JournalEntry): string {
+    return `${entry.epoch}:${entry.seq}:${entry.entryType}`;
+  }
+
+  /** Mark only newly appended assistant responses for progressive text reveal.
+   * @param currentEntries Current journal entries after a store update.
+   * @return No value; prepended history and initial history never animate.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function trackStreamingAssistant(currentEntries: JournalEntry[]): void {
+    const previousLastEntryStillAtBoundary =
+      knownEntryCount === 0 ||
+      (currentEntries[knownEntryCount - 1] != null &&
+        entryIdentity(currentEntries[knownEntryCount - 1]) === knownLastEntryIdentity);
+
+    if (
+      feedMounted &&
+      currentEntries.length > knownEntryCount &&
+      previousLastEntryStillAtBoundary
+    ) {
+      const newAssistantEntry = currentEntries
+        .slice(knownEntryCount)
+        .reverse()
+        .find((entry) => entry.entryType === 'assistant' && entry.text);
+      if (newAssistantEntry) streamingAssistantIdentity = entryIdentity(newAssistantEntry);
+    }
+
+    knownEntryCount = currentEntries.length;
+    knownLastEntryIdentity = currentEntries.length
+      ? entryIdentity(currentEntries[currentEntries.length - 1])
+      : '';
+  }
+
+  /** Start or stop the lightweight elapsed timer shown beside the working state.
+   * @param working Whether the provider is currently processing the conversation.
+   * @return No value; at most one one-second timer remains active.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function syncWorkingClock(working: boolean): void {
+    if (working && workingTimer === null) {
+      workingStartedAt = Date.now();
+      workingElapsedSeconds = 0;
+      workingTimer = setInterval(() => {
+        workingElapsedSeconds = Math.floor((Date.now() - workingStartedAt) / 1000);
+      }, 1000);
+    } else if (!working && workingTimer !== null) {
+      clearInterval(workingTimer);
+      workingTimer = null;
+      workingElapsedSeconds = 0;
+    }
+  }
+
+  /** Release the working-state timer when this feed is destroyed.
+   * @return No value; timer state is reset.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function stopWorkingClock(): void {
+    if (workingTimer !== null) clearInterval(workingTimer);
+    workingTimer = null;
+  }
+
+  $: trackStreamingAssistant(entries);
+  $: syncWorkingClock(isWorking);
 
   // ── Display item grouping ──────────────────────────────────────────────────
   interface DisplayItem {
@@ -142,6 +226,7 @@
   let isAtBottom = true;
   let lastScrollTop = 0;
   let scrollerEl: HTMLDivElement;
+  let timelineEl: HTMLDivElement;
   let programmaticScroll = false; // flag to ignore onScroll after programmatic changes
 
   // When display grows, reset visibleFrom to show the tail if at bottom.
@@ -262,7 +347,15 @@
   // streaming progress, markdown rendering, code blocks expanding, etc.
   let resizeObs: ResizeObserver | undefined;
 
-  onMount(() => {
+  /** Observe only the timeline and viewport so content growth keeps the feed pinned efficiently.
+   * @return Cleanup callback that disconnects the shared resize observer.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function observeFeedSize(): () => void {
+    feedMounted = true;
+    knownEntryCount = entries.length;
+    knownLastEntryIdentity = entries.length ? entryIdentity(entries[entries.length - 1]) : '';
     if (scrollerEl) scrollerEl.scrollTop = scrollerEl.scrollHeight;
 
     resizeObs = new ResizeObserver(() => {
@@ -273,32 +366,18 @@
       }
     });
 
-    // Observe the scroller's *content* — when any child changes size the
-    // observer fires, letting us pin to the bottom without tracking item count.
-    for (const child of scrollerEl.children) {
-      resizeObs.observe(child);
-    }
-
-    // Also observe the scroller itself so we catch container resizes (e.g. window resize).
+    resizeObs.observe(timelineEl);
     resizeObs.observe(scrollerEl);
 
     return () => resizeObs?.disconnect();
-  });
-
-  // When visible items change, observe any newly added children.
-  let prevVisibleLen = 0;
-  $: if (visibleItems.length !== prevVisibleLen) {
-    prevVisibleLen = visibleItems.length;
-    if (scrollerEl && resizeObs) {
-      for (const child of scrollerEl.children) {
-        resizeObs.observe(child); // no-op if already observed
-      }
-    }
   }
+
+  onMount(observeFeedSize);
+  onDestroy(stopWorkingClock);
 </script>
 
 <div class="feed-scroller" class:compact bind:this={scrollerEl} onscroll={onScroll}>
-  <div class="timeline">
+  <div class="timeline" bind:this={timelineEl}>
     {#if hasMore}
       <button type="button" class="load-more" onclick={loadMore} disabled={loadingEarlierEntries}>
         {loadingEarlierEntries ? 'loading…' : 'load earlier'}
@@ -413,7 +492,10 @@
               {/if}
             {:else if entry.entryType === 'assistant'}
               <div class="event-text assistant-text">
-                <Markdown content={entry.text ?? ''} />
+                <Markdown
+                  content={entry.text ?? ''}
+                  stream={streamingAssistantIdentity === entryIdentity(entry)}
+                />
               </div>
             {:else if entry.entryType === 'user'}
               <div class="event-text user-text">{entry.text}</div>
@@ -436,6 +518,7 @@
           </div>
           <div class="working-pill" role="status" aria-live="polite">
             <span class="working-word">working</span>
+            <span class="working-elapsed" aria-hidden="true">· {workingElapsedSeconds}s</span>
             <span class="typing-dots" aria-hidden="true">
               <span class="dot"></span>
               <span class="dot"></span>
@@ -474,35 +557,36 @@
 
   .timeline {
     width: 100%;
-    padding: 16px 24px;
+    padding: 10px 18px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 8px;
     font-family: var(--font-mono, var(--mono), monospace);
+    font-variant-ligatures: none;
   }
 
   .timeline-event {
     display: grid;
-    grid-template-columns: 14px 1fr;
-    gap: 8px;
+    grid-template-columns: 12px 1fr;
+    gap: 6px;
     position: relative;
-    border-radius: 6px;
+    border-radius: 4px;
     transition: background 0.15s ease;
   }
   .timeline-event.user {
     background: linear-gradient(135deg, rgba(79, 146, 247, 0.08) 0%, rgba(79, 146, 247, 0.02) 100%);
     border: 1px solid rgba(79, 146, 247, 0.22);
     border-left: 3px solid var(--user-fg, #4f92f7);
-    padding: 10px 14px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    padding: 6px 9px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   }
   .timeline-event:not(:last-child)::before {
     display: none;
   }
 
   .timeline-node {
-    width: 14px;
-    height: 18px;
+    width: 12px;
+    height: 16px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -513,7 +597,7 @@
   .timeline-node::after {
     content: '›';
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--t3);
     background: transparent;
@@ -522,7 +606,7 @@
   .timeline-node.user::after {
     content: '›';
     color: var(--user-fg, #4f92f7);
-    font-size: 15px;
+    font-size: 12px;
     font-weight: 700;
     text-shadow: 0 0 8px rgba(79, 146, 247, 0.5);
     background: transparent;
@@ -547,11 +631,11 @@
   .event-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 2px;
+    gap: 6px;
+    margin-bottom: 1px;
     color: var(--t3);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 10px;
   }
   .event-actor {
     font-weight: 600;
@@ -561,13 +645,13 @@
   .event-actor.user {
     color: var(--user-fg, #4f92f7);
     font-weight: 700;
-    font-size: 9.5px;
+    font-size: 9px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     background: rgba(79, 146, 247, 0.14);
     border: 1px solid rgba(79, 146, 247, 0.28);
     border-radius: 4px;
-    padding: 1px 6px;
+    padding: 0 4px;
   }
   .event-actor.assistant,
   .event-actor.working {
@@ -581,19 +665,19 @@
 
   .event-text {
     color: var(--t0);
-    font-size: 13px;
-    line-height: 1.55;
+    font-size: 12px;
+    line-height: 1.45;
   }
   .user-text {
     max-width: 100%;
     width: 100%;
     border: none;
     border-radius: 0;
-    padding: 2px 0 0;
+    padding: 1px 0 0;
     background: transparent;
     font-family: var(--font-mono, var(--mono), monospace);
-    font-size: 13.5px;
-    line-height: 1.55;
+    font-size: 12px;
+    line-height: 1.45;
     color: var(--t0, #ffffff);
     white-space: pre-wrap;
     word-break: break-word;
@@ -602,12 +686,12 @@
   .system-text {
     color: var(--t1);
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 11px;
   }
   .system-text.system-error {
     color: var(--t1);
     border-left: 2px solid var(--s-error);
-    padding: 4px 0 4px 12px;
+    padding: 2px 0 2px 8px;
     background: none;
     border-radius: 0;
   }
@@ -615,19 +699,24 @@
   .working-pill {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     color: var(--think-fg, #a78bfa);
     background: var(--think-bg, rgba(167, 139, 250, 0.08));
     border: 1px solid color-mix(in srgb, var(--think-fg, #a78bfa), transparent 82%);
     border-radius: 999px;
-    padding: 4px 10px;
+    padding: 3px 7px;
     font-family: var(--mono);
-    font-size: 10.5px;
+    font-size: 9.5px;
     line-height: 1;
   }
 
   .working-word {
     letter-spacing: 0.02em;
+  }
+
+  .working-elapsed {
+    color: var(--t3);
+    font-variant-numeric: tabular-nums;
   }
 
   .typing-dots {
@@ -736,24 +825,24 @@
     font-size: var(--sm);
     background: var(--think-bg);
     border-left: 2px solid var(--think-fg);
-    padding: var(--sp-3) var(--sp-5);
+    padding: 6px 9px;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     max-height: 280px;
     overflow-y: auto;
-    margin-top: 5px;
+    margin-top: 3px;
   }
 
   .tool-group-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 5px;
     background: var(--bg2);
     border: 1px solid var(--bd1);
     border-radius: 999px;
     color: var(--t1);
     font-family: var(--mono);
-    font-size: 11px;
-    padding: 4px 12px;
+    font-size: 10px;
+    padding: 3px 8px;
     cursor: pointer;
     transition:
       color 0.15s,
@@ -772,7 +861,7 @@
     transform: rotate(90deg);
   }
   .tool-group-items {
-    margin-top: 8px;
+    margin-top: 5px;
     display: flex;
     flex-direction: column;
   }
@@ -811,16 +900,16 @@
   /* ── Compact density ── */
   .feed-scroller.compact .timeline {
     width: 100%;
-    padding: 18px 22px;
-    gap: 9px;
+    padding: 8px 16px;
+    gap: 6px;
   }
   .feed-scroller.compact .timeline-event {
-    grid-template-columns: 16px 1fr;
-    gap: 11px;
+    grid-template-columns: 10px 1fr;
+    gap: 5px;
   }
   .feed-scroller.compact .timeline-node {
-    width: 16px;
-    height: 16px;
+    width: 10px;
+    height: 14px;
   }
   .feed-scroller.compact .timeline-node::after {
     width: 6px;
@@ -832,8 +921,8 @@
     bottom: -10px;
   }
   .feed-scroller.compact .event-text {
-    font-size: 12px;
-    line-height: 1.52;
+    font-size: 11px;
+    line-height: 1.4;
   }
   .feed-scroller.compact .user-text {
     border: 0;
@@ -844,8 +933,8 @@
 
   @media (max-width: 768px) {
     .timeline {
-      padding: 20px 18px 16px;
-      gap: 10px;
+      padding: 10px 12px;
+      gap: 7px;
     }
     .think-body {
       max-height: 180px;

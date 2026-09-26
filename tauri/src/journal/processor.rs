@@ -200,8 +200,15 @@ fn parse_claude_rate_limit_entries(info: Option<&Value>) -> Vec<RateLimitInfo> {
     entries
 }
 
-/// Process a single raw JSONL line from PTY stdout and update state.
-/// This is the real-time counterpart to parse_journal (which reads files).
+/// Process a provider JSONL event and update the live conversation state.
+///
+/// This is the real-time counterpart to `parse_journal`, which reads persisted output files.
+///
+/// @param state Mutable journal state associated with the running session.
+/// @param line Raw JSONL event emitted by the provider CLI.
+/// @return No value; recognized entries and status changes are applied to `state`.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-27
 pub fn process_line(state: &mut JournalState, line: &str) {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -427,15 +434,16 @@ pub fn process_line(state: &mut JournalState, line: &str) {
         }
 
         "system" => {
-            if let Some(subtype) = raw
-                .message
-                .as_ref()
-                .and_then(|m| m.get("subtype"))
-                .and_then(|v| v.as_str())
-            {
-                if subtype == "stop_hook_summary" {
-                    state.status = AgentStatus::Idle;
-                }
+            let subtype = raw.subtype.as_deref().or_else(|| {
+                raw.message
+                    .as_ref()
+                    .and_then(|m| m.get("subtype"))
+                    .and_then(|v| v.as_str())
+            });
+            if subtype == Some("stop_hook_summary") {
+                state.status = AgentStatus::Idle;
+            } else {
+                state.status = AgentStatus::Working;
             }
         }
 
@@ -1444,6 +1452,19 @@ mod process_line_tests {
         process_line(&mut state, system_stop_hook());
         t.phase("Assert");
         t.eq("status is Idle", state.status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn should_remain_working_during_claude_system_startup() {
+        let mut t = TestCase::new("should_remain_working_during_claude_system_startup");
+        t.phase("Act");
+        let mut state = JournalState::default();
+        process_line(
+            &mut state,
+            r#"{"type":"system","subtype":"init","session_id":"claude-session"}"#,
+        );
+        t.phase("Assert");
+        t.eq("status is Working", state.status, AgentStatus::Working);
     }
 
     // -- Progress

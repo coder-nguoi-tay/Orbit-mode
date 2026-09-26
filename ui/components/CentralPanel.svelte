@@ -1,5 +1,6 @@
 <script lang="ts">
   import { get } from 'svelte/store';
+  import { tick } from 'svelte';
   import type { Session } from '../lib/stores/sessions';
   import { journal, pendingMessages } from '../lib/stores/journal';
   import { backends as backendsStore } from '../lib/stores/providers';
@@ -28,7 +29,17 @@
   let atBottom = true;
   let hasEarlierHistory = false;
   let loadingEarlierHistory = false;
-  const HISTORY_PAGE_SIZE = 100;
+  const HISTORY_PAGE_SIZE = 50;
+
+  /** Yield long-running session setup until the selected panel has painted once.
+   * @return Completion on the animation frame after pending Svelte updates flush.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  async function waitForPanelPaint(): Promise<void> {
+    await tick();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
 
   /** Load one session's journal once and cache empty histories as well.
    * @param id Session whose history is being opened.
@@ -38,11 +49,20 @@
    * @since 2026-09-27
    */
   async function loadHistory(id: number): Promise<void> {
-    const cachedEntries = get(journal).get(id);
+    let cachedEntries = get(journal).get(id);
     if (cachedEntries) {
       hasEarlierHistory = cachedEntries.length >= HISTORY_PAGE_SIZE;
       return;
     }
+
+    await waitForPanelPaint();
+    if (loadedId !== id) return;
+    cachedEntries = get(journal).get(id);
+    if (cachedEntries) {
+      hasEarlierHistory = cachedEntries.length >= HISTORY_PAGE_SIZE;
+      return;
+    }
+
     try {
       const entries = await getSessionJournalPage(id, null, HISTORY_PAGE_SIZE);
       journal.update((m) => (m.has(id) ? m : new Map(m).set(id, entries)));
@@ -85,17 +105,27 @@
     }
   }
 
-  /** Read a session's Git branch only when the session has no cached branch.
+  /** Read a session's Git branch after its panel has painted.
+   * @param id Session that owns the repository.
+   * @param cwd Repository directory captured before asynchronous work starts.
+   * @param knownBranch Existing branch value that avoids a redundant read.
    * @return Completion after the branch is read or the repository is skipped.
+   * @throws No propagated error; non-Git directories keep an empty branch.
    * @author ductv <ductv@getflycrm.com>
-   * @since 2026-09-26
+   * @since 2026-09-27
    */
-  async function fetchBranch(): Promise<void> {
-    if (!session.cwd || session.gitBranch) return;
+  async function fetchBranch(
+    id: number,
+    cwd: string | null,
+    knownBranch: string | null
+  ): Promise<void> {
+    if (!cwd || knownBranch) return;
+    await waitForPanelPaint();
+    if (loadedId !== id) return;
     try {
-      const branch = await invoke<string | null>('git_branch', { cwd: session.cwd });
-      if (branch && (session.gitBranch ?? null) !== branch) {
-        sessions.update((l) => updateSessionState(l, session.id, { gitBranch: branch }));
+      const branch = await invoke<string | null>('git_branch', { cwd });
+      if (loadedId === id && branch && knownBranch !== branch) {
+        sessions.update((list) => updateSessionState(list, id, { gitBranch: branch }));
       }
     } catch {
       /* not a git repo — no-op */
@@ -106,7 +136,7 @@
   $: if (session?.id != null && session.id !== loadedId) {
     loadedId = session.id;
     loadHistory(session.id);
-    fetchBranch();
+    fetchBranch(session.id, session.cwd, session.gitBranch);
   }
 
   $: entries = $journal.get(session?.id) ?? [];
@@ -313,15 +343,15 @@
 
   .pending-msg {
     display: flex;
-    gap: 12px;
+    gap: 7px;
     align-items: flex-start;
-    padding: 10px 14px;
-    margin: 8px 24px;
+    padding: 6px 9px;
+    margin: 5px 18px;
     background: linear-gradient(135deg, rgba(79, 146, 247, 0.08) 0%, rgba(79, 146, 247, 0.02) 100%);
     border: 1px solid rgba(79, 146, 247, 0.22);
     border-left: 3px solid var(--user-fg, #4f92f7);
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
     font-family: var(--font-mono, var(--mono), monospace);
     animation: pendingPulse 2.5s ease-in-out infinite;
   }
@@ -337,7 +367,7 @@
   .pending-body {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     flex: 1;
     min-width: 0;
   }
@@ -364,22 +394,25 @@
     letter-spacing: 0.02em;
   }
   .pending-text {
-    font-size: 13px;
-    line-height: 1.55;
+    font-size: 12px;
+    line-height: 1.45;
     color: var(--t0, #ffffff);
     white-space: pre-wrap;
     word-break: break-word;
     font-weight: 500;
   }
   @keyframes pendingPulse {
-    0%, 100% {
+    0%,
+    100% {
       border-color: rgba(79, 146, 247, 0.22);
       border-left-color: var(--user-fg, #4f92f7);
     }
     50% {
       border-color: rgba(79, 146, 247, 0.45);
       border-left-color: #70a7ff;
-      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25), 0 0 14px rgba(79, 146, 247, 0.1);
+      box-shadow:
+        0 4px 18px rgba(0, 0, 0, 0.25),
+        0 0 14px rgba(79, 146, 247, 0.1);
     }
   }
 

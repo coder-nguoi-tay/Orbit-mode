@@ -745,22 +745,22 @@ If the user provides neither role nor name nor mission, ask one concise question
 
   .quiet-composer {
     width: calc(100% - 48px);
-    margin: 8px 24px 16px;
+    margin: 6px 24px 10px;
     border: 1px solid var(--bd1);
     background: var(--bg1);
     border-radius: 4px;
-    padding: 8px 12px;
+    padding: 6px 9px;
     box-shadow: none;
   }
   .quiet-composer .input-row {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 2px 0 6px;
+    gap: 6px;
+    padding: 1px 0 4px;
   }
   .cmd-prompt {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--t1);
     line-height: 1.5;
@@ -769,8 +769,8 @@ If the user provides neither role nor name nor mission, ask one concise question
   }
   .quiet-composer textarea {
     font-family: var(--mono);
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 12px;
+    line-height: 1.4;
     color: var(--t0);
     padding: 0;
   }
@@ -780,7 +780,7 @@ If the user provides neither role nor name nor mission, ask one concise question
     align-items: center;
     gap: 8px;
     border-top: 1px solid color-mix(in srgb, var(--bd1), transparent 50%);
-    padding-top: 6px;
+    padding-top: 4px;
   }
   .btns {
     display: flex;
@@ -815,10 +815,10 @@ If the user provides neither role nor name nor mission, ask one concise question
   }
   .quiet-composer.compact {
     width: calc(100% - 48px);
-    margin: 6px 24px 12px;
-    min-height: 48px;
+    margin: 5px 24px 8px;
+    min-height: 42px;
     border-radius: 4px;
-    padding: 6px 10px;
+    padding: 5px 8px;
   }
   .quiet-composer.compact textarea {
     font-size: 11px;

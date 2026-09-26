@@ -139,6 +139,9 @@
     color: var(--t1);
     text-align: left;
     cursor: pointer;
+    contain: layout paint;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 58px;
   }
   .quiet-session:hover {
     background: color-mix(in srgb, var(--t0), transparent 97%);

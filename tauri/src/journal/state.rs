@@ -65,6 +65,8 @@ pub(crate) struct RawEntry {
     #[serde(default)]
     pub r#type: String,
     #[serde(default)]
+    pub subtype: Option<String>,
+    #[serde(default)]
     pub message: Option<Value>,
     #[serde(default)]
     pub timestamp: Option<String>,

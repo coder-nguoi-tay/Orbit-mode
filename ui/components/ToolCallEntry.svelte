@@ -652,9 +652,9 @@
 <style>
   /* ── Tool Card ── */
   .tc-card {
-    margin: var(--sp-2) 0;
+    margin: 3px 0;
     border: 1px solid var(--bd);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     overflow: hidden;
     background: var(--bg1);
   }
@@ -709,13 +709,13 @@
   .tc-header {
     display: flex;
     align-items: center;
-    gap: var(--sp-3);
-    padding: var(--sp-2) var(--sp-4);
+    gap: 5px;
+    padding: 4px 8px;
     background: var(--bg2);
     border-bottom: 1px solid var(--bd);
     font-size: 10.5px;
     font-family: var(--mono);
-    min-height: 28px;
+    min-height: 24px;
     overflow: hidden;
   }
 
@@ -1173,7 +1173,7 @@
   .quiet-tool-card {
     border: 1px solid color-mix(in srgb, var(--tool-fg), transparent 84%);
     background: var(--tool-bg);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     overflow: hidden;
     max-width: 100%;
   }
@@ -1181,11 +1181,11 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 12px;
+    padding: 6px 9px;
     border-bottom: 1px solid color-mix(in srgb, var(--tool-fg), transparent 90%);
     color: var(--tool-fg);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 10px;
   }
   .quiet-tool-body {
     /* No padding: diff/code/terminal fill the card edge-to-edge so the tinted
@@ -1194,8 +1194,8 @@
     background: rgba(0, 0, 0, 0.12);
     color: var(--t1);
     font-family: var(--mono);
-    font-size: 11px;
-    line-height: 1.55;
+    font-size: 10px;
+    line-height: 1.45;
   }
   /* ── Compact density: tighter header, code, and gutters ── */
   .quiet-tool-card.compact .tc-header {

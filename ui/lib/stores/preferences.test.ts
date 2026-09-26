@@ -18,10 +18,10 @@ describe('preferences stores', () => {
 
   it('persists compact density preference', async () => {
     const { compactDensity } = await import('./preferences');
-    expect(get(compactDensity)).toBe(false);
-    compactDensity.set(true);
     expect(get(compactDensity)).toBe(true);
-    expect(localStorage.getItem('compactDensity')).toBe('true');
+    compactDensity.set(false);
+    expect(get(compactDensity)).toBe(false);
+    expect(localStorage.getItem('compactDensity')).toBe('false');
   });
 
   it('persists window opacity and updates document attribute', async () => {

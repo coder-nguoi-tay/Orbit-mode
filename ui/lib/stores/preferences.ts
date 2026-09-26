@@ -94,7 +94,7 @@ function createWindowOpacityStore() {
 export const theme = createThemeStore();
 export const metaPanelVisible = createBooleanPreferenceStore('metaPanelVisible', false);
 export const sidebarVisible = createBooleanPreferenceStore('sidebarVisible', true);
-export const compactDensity = createBooleanPreferenceStore('compactDensity', false);
+export const compactDensity = createBooleanPreferenceStore('compactDensity', true);
 /** Git diff viewer: open in edit mode by default. The pencil toggle switches to
  * the read-only unified diff view. */
 export const gitEditable = createBooleanPreferenceStore('gitEditable', true);
