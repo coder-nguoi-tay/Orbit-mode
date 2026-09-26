@@ -16,6 +16,7 @@ export interface HttpSettings {
   enabled: boolean;
   host: string;
   port: number;
+  restartRequired: boolean;
 }
 
 export async function generateApiKey(label: string): Promise<ApiKeyCreated> {

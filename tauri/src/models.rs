@@ -240,6 +240,13 @@ pub struct ModelUsageSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TokenUsageHistoryPoint {
+    pub bucket_start: String,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageOverview {
     pub total_tokens_today: u64,
     pub total_cost_today: f64,
@@ -248,6 +255,7 @@ pub struct UsageOverview {
     pub quotas: Vec<ProviderQuota>,
     pub project_summaries: Vec<ProjectUsageSummary>,
     pub model_summaries: Vec<ModelUsageSummary>,
+    pub token_usage_history: Vec<TokenUsageHistoryPoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

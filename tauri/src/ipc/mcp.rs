@@ -465,13 +465,13 @@ pub fn tools_schema() -> Value {
     json!([
         {
             "name": "orbit_create_agent",
-            "description": "Create a new agent session in the Orbit dashboard. IMPORTANT: Before calling this, call orbit_list_providers to discover available providers and their exact model IDs — do NOT guess model names. With wait=true (default), this blocks until the agent completes or times out and returns the full output. With wait=false, it returns immediately with a sessionId — you MUST then poll orbit_get_status in a loop until status is 'completed', 'stopped', or 'error' to get the result.",
+            "description": "Create a new agent session in the Orbit-mode dashboard. IMPORTANT: Before calling this, call orbit_list_providers to discover available providers and their exact model IDs — do NOT guess model names. With wait=true (default), this blocks until the agent completes or times out and returns the full output. With wait=false, it returns immediately with a sessionId — you MUST then poll orbit_get_status in a loop until status is 'completed', 'stopped', or 'error' to get the result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Display name for the session in the Orbit sidebar. If omitted, defaults to the project folder name."
+                        "description": "Display name for the session in the Orbit-mode sidebar. If omitted, defaults to the project folder name."
                     },
                     "cwd": {
                         "type": "string",

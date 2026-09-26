@@ -34,7 +34,7 @@
         error = 'invalid API key';
       }
     } catch {
-      error = 'cannot connect to Orbit';
+      error = 'cannot connect to Orbit-mode';
     } finally {
       loading = false;
     }
@@ -54,7 +54,7 @@
         <circle cx="50" cy="50" r="8" fill="var(--ac)"></circle>
         <circle cx="50" cy="18" r="5" fill="var(--ac)" opacity="0.6"></circle>
       </svg>
-      <span class="logo-text">orbit</span>
+      <span class="logo-text">Orbit-mode</span>
     </div>
 
     <p class="subtitle">paste your access key to connect</p>
@@ -78,7 +78,7 @@
       </button>
     </form>
 
-    <p class="hint">generate a key in Orbit desktop: sidebar footer &rarr; Phone &rarr; Advanced</p>
+    <p class="hint">generate a key in Orbit-mode desktop: sidebar footer &rarr; Phone &rarr; Advanced</p>
   </div>
 </div>
 

@@ -21,6 +21,7 @@
   import { sessions } from '../lib/stores/sessions';
   import { usageCenterOpen } from '../lib/stores/usage';
   import { formatTimeRemaining } from '../lib/cost';
+  import { IS_WEB } from '../lib/tauri/invoke';
 
   let label = '';
   let authType: AccountAuthType = 'chat_gpt_authenticated';
@@ -52,6 +53,10 @@
   }
 
   onMount(() => {
+    if (IS_WEB) {
+      error = 'Account management is available in the desktop app only.';
+      return;
+    }
     refreshProviderAccounts()
       .then(() => loadAutomaticHandoffStates())
       .catch((failure) => (error = String(failure)));
@@ -70,7 +75,9 @@
       .catch((failure) => (error = String(failure)));
     onAccountLoginProgress(({ accountId, line }) => {
       if (accountId === accountIdInLogin) loginInstructions = [...loginInstructions, line];
-    }).then((unlisten) => (stopLoginProgress = unlisten));
+    })
+      .then((unlisten) => (stopLoginProgress = unlisten))
+      .catch((failure) => (error = String(failure)));
     return () => stopLoginProgress?.();
   });
 
@@ -260,140 +267,150 @@
       Open Agent Usage Control Center
     </button>
   </div>
-  <p>
-    Add one isolated Codex profile for each ChatGPT account. Orbit stores only the label and status;
-    the official Codex login keeps the credentials in that profile's separate home.
-  </p>
-  <p>
-    Enable <strong>Automatic quota handoff</strong> on the profiles that may be used after the current
-    profile reaches an official quota limit. Orbit keeps each account's usage separate and uses each selected
-    profile at most once per session.
-  </p>
-  <div class="add-row">
-    <label>
-      Profile label
-      <input bind:value={label} placeholder="Personal, Work, API Project" disabled={busy} />
-    </label>
-    <label>
-      Authentication
-      <select bind:value={authType} disabled={busy}>
-        <option value="chat_gpt_authenticated">ChatGPT account (Codex login)</option>
-        <option value="api_key">Codex / API key</option>
-      </select>
-    </label>
-    <button on:click={addAccount} disabled={busy || !label.trim()}>Add account</button>
-  </div>
-  {#if error}<p class="account-error" role="alert">{error}</p>{/if}
-
-  {#if projects.length}
-    <div class="project-preferences">
-      <strong>Default Codex profile by project</strong>
-      {#each projects as project}
-        <label>
-          {project.name}
-          <select
-            value={projectAccountIds[project.id] ?? ''}
-            on:change={(event) => chooseProjectAccount(project.id, event.currentTarget.value)}
-          >
-            <option value="">Provider default</option>
-            {#each accounts.filter((account) => account.providerId === 'codex' && ['available', 'busy', 'near_limit', 'unknown'].includes(account.status)) as account}
-              <option value={account.id}>{account.label}</option>
-            {/each}
-          </select>
-        </label>
-      {/each}
+  {#if IS_WEB}
+    <p class="account-error" role="alert">
+      Account profiles and credential actions are available in the desktop app only. Usage data
+      remains available from the web dashboard.
+    </p>
+  {:else}
+    <p>
+      Add one isolated Codex profile for each ChatGPT account. Orbit-mode stores only the
+      label and status; the official Codex login keeps the credentials in that profile's separate
+      home.
+    </p>
+    <p>
+      Enable <strong>Automatic quota handoff</strong> on the profiles that may be used after the current
+      profile reaches an official quota limit. Orbit-mode keeps each account's usage separate
+      and uses each selected profile at most once per session.
+    </p>
+    <div class="add-row">
+      <label>
+        Profile label
+        <input bind:value={label} placeholder="Personal, Work, API Project" disabled={busy} />
+      </label>
+      <label>
+        Authentication
+        <select bind:value={authType} disabled={busy}>
+          <option value="chat_gpt_authenticated">ChatGPT account (Codex login)</option>
+          <option value="api_key">Codex / API key</option>
+        </select>
+      </label>
+      <button on:click={addAccount} disabled={busy || !label.trim()}>Add account</button>
     </div>
-  {/if}
+    {#if error}<p class="account-error" role="alert">{error}</p>{/if}
 
-  {#each accounts as account (account.id)}
-    {@const exactQuota = $providerQuotas.find(
-      (sample) => sample.providerAccountId === account.id || sample.accountKey === account.id
-    )}
-    {@const defaultQuota = account.isDefault
-      ? $providerQuotas.find(
-          (sample) => sample.accountKey === 'default' || !sample.providerAccountId
-        )
-      : undefined}
-    {@const quota = exactQuota ?? defaultQuota}
-    <article class="account-card">
-      <div class="account-heading">
-        <strong>{account.label}</strong>
-        <span
-          >{account.providerId} · {account.authType === 'api_key' ? 'API billing' : 'ChatGPT'}</span
-        >
-        {#if account.isDefault}<span>default</span>{/if}
-      </div>
-      <p>
-        Status: {account.status} · Active sessions: {$sessions.filter(
-          (session) =>
-            session.providerAccountId === account.id &&
-            ['running', 'waiting'].includes(session.status)
-        ).length}
-      </p>
-      {#if account.id !== 'codex-system-default'}
-        <label class="auto-handoff-toggle">
-          <input
-            type="checkbox"
-            checked={automaticHandoffAccounts[account.id] ?? false}
-            disabled={busy || !['available', 'busy', 'near_limit'].includes(account.status)}
-            on:change={(event) => toggleAutomaticHandoff(account, event.currentTarget.checked)}
-          />
-          Automatic quota handoff
-        </label>
-      {/if}
-      {#if account.authType !== 'api_key'}
-        {#if quota?.fiveHour}<p>
-            5h: {Math.round(quota.fiveHour.utilization * 100)}% · {quota.source}
-            {#if quota.fiveHour.resetsAt}· resets {formatTimeRemaining(
-                quota.fiveHour.resetsAt
-              )}{/if}
-          </p>{/if}
-        {#if quota?.sevenDay}<p>
-            7d: {Math.round(quota.sevenDay.utilization * 100)}% · {quota.source}
-            {#if quota.sevenDay.resetsAt}· resets {formatTimeRemaining(
-                quota.sevenDay.resetsAt
-              )}{/if}
-          </p>{/if}
-      {:else}
-        <p>API billing and rate limits are managed by the configured API project.</p>
-      {/if}
-      {#if accountIdInLogin === account.id && loginInstructions.length}
-        <div class="login-instructions" role="status">
-          {#each loginInstructions as instruction}<p>{instruction}</p>{/each}
-        </div>
-      {/if}
-      <div class="account-actions">
-        {#if account.authType === 'api_key' && account.id !== 'codex-system-default'}
+    {#if projects.length}
+      <div class="project-preferences">
+        <strong>Default Codex profile by project</strong>
+        {#each projects as project}
           <label>
-            API key
+            {project.name}
+            <select
+              value={projectAccountIds[project.id] ?? ''}
+              on:change={(event) => chooseProjectAccount(project.id, event.currentTarget.value)}
+            >
+              <option value="">Provider default</option>
+              {#each accounts.filter((account) => account.providerId === 'codex' && ['available', 'busy', 'near_limit', 'unknown'].includes(account.status)) as account}
+                <option value={account.id}>{account.label}</option>
+              {/each}
+            </select>
+          </label>
+        {/each}
+      </div>
+    {/if}
+
+    {#each accounts as account (account.id)}
+      {@const exactQuota = $providerQuotas.find(
+        (sample) => sample.providerAccountId === account.id || sample.accountKey === account.id
+      )}
+      {@const defaultQuota = account.isDefault
+        ? $providerQuotas.find(
+            (sample) => sample.accountKey === 'default' || !sample.providerAccountId
+          )
+        : undefined}
+      {@const quota = exactQuota ?? defaultQuota}
+      <article class="account-card">
+        <div class="account-heading">
+          <strong>{account.label}</strong>
+          <span
+            >{account.providerId} · {account.authType === 'api_key'
+              ? 'API billing'
+              : 'ChatGPT'}</span
+          >
+          {#if account.isDefault}<span>default</span>{/if}
+        </div>
+        <p>
+          Status: {account.status} · Active sessions: {$sessions.filter(
+            (session) =>
+              session.providerAccountId === account.id &&
+              ['running', 'waiting'].includes(session.status)
+          ).length}
+        </p>
+        {#if account.id !== 'codex-system-default'}
+          <label class="auto-handoff-toggle">
             <input
-              type="password"
-              value={apiKeyInputs[account.id] || ''}
-              on:input={(event) =>
-                (apiKeyInputs = {
-                  ...apiKeyInputs,
-                  [account.id]: event.currentTarget.value,
-                })}
-              autocomplete="off"
+              type="checkbox"
+              checked={automaticHandoffAccounts[account.id] ?? false}
+              disabled={busy || !['available', 'busy', 'near_limit'].includes(account.status)}
+              on:change={(event) => toggleAutomaticHandoff(account, event.currentTarget.checked)}
             />
+            Automatic quota handoff
           </label>
         {/if}
-        {#if account.id !== 'codex-system-default'}
-          <button on:click={() => loginAccount(account)} disabled={busy}
-            >Sign in with ChatGPT</button
-          >
+        {#if account.authType !== 'api_key'}
+          {#if quota?.fiveHour}<p>
+              5h: {Math.round(quota.fiveHour.utilization * 100)}% · {quota.source}
+              {#if quota.fiveHour.resetsAt}· resets {formatTimeRemaining(
+                  quota.fiveHour.resetsAt
+                )}{/if}
+            </p>{/if}
+          {#if quota?.sevenDay}<p>
+              7d: {Math.round(quota.sevenDay.utilization * 100)}% · {quota.source}
+              {#if quota.sevenDay.resetsAt}· resets {formatTimeRemaining(
+                  quota.sevenDay.resetsAt
+                )}{/if}
+            </p>{/if}
+        {:else}
+          <p>API billing and rate limits are managed by the configured API project.</p>
         {/if}
-        <button on:click={() => checkAccount(account)} disabled={busy}>Check</button>
-        <button on:click={() => renameAccount(account)} disabled={busy}>Rename</button>
-        {#if !account.isDefault && !['needs_login', 'auth_expired', 'quota_exceeded', 'unavailable'].includes(account.status)}
-          <button on:click={() => makeDefault(account)} disabled={busy}>Make default</button>
+        {#if accountIdInLogin === account.id && loginInstructions.length}
+          <div class="login-instructions" role="status">
+            {#each loginInstructions as instruction}<p>{instruction}</p>{/each}
+          </div>
         {/if}
-        {#if account.id !== 'codex-system-default'}
-          <button on:click={() => removeAccount(account)} disabled={busy}>Remove</button>
-        {/if}
-      </div>
-    </article>
-  {/each}
+        <div class="account-actions">
+          {#if account.authType === 'api_key' && account.id !== 'codex-system-default'}
+            <label>
+              API key
+              <input
+                type="password"
+                value={apiKeyInputs[account.id] || ''}
+                on:input={(event) =>
+                  (apiKeyInputs = {
+                    ...apiKeyInputs,
+                    [account.id]: event.currentTarget.value,
+                  })}
+                autocomplete="off"
+              />
+            </label>
+          {/if}
+          {#if account.id !== 'codex-system-default'}
+            <button on:click={() => loginAccount(account)} disabled={busy}
+              >Sign in with ChatGPT</button
+            >
+          {/if}
+          <button on:click={() => checkAccount(account)} disabled={busy}>Check</button>
+          <button on:click={() => renameAccount(account)} disabled={busy}>Rename</button>
+          {#if !account.isDefault && !['needs_login', 'auth_expired', 'quota_exceeded', 'unavailable'].includes(account.status)}
+            <button on:click={() => makeDefault(account)} disabled={busy}>Make default</button>
+          {/if}
+          {#if account.id !== 'codex-system-default'}
+            <button on:click={() => removeAccount(account)} disabled={busy}>Remove</button>
+          {/if}
+        </div>
+      </article>
+    {/each}
+  {/if}
 </section>
 
 <style>

@@ -36,6 +36,7 @@
   let resetting = false;
   let confirmReset = false;
   let activeTab: 'mobile' | 'server' | 'accounts' | 'danger' = 'mobile';
+  let errorMessage = '';
 
   $: connectHost =
     host === '127.0.0.1' || host === 'localhost' || host === '0.0.0.0' ? lanIp : host;
@@ -50,45 +51,83 @@
         : 'ready';
 
   $: if (accessUrl && connectionState === 'ready') {
-    generateQrSvg(accessUrl, 200).then((svg) => (qrSvg = svg));
+    generateQrSvg(accessUrl, 200)
+      .then((svg) => (qrSvg = svg))
+      .catch((failure) => {
+        qrSvg = '';
+        errorMessage = failure instanceof Error ? failure.message : String(failure);
+      });
   } else {
     qrSvg = '';
   }
 
   onMount(async () => {
-    const settings = await getHttpSettings();
-    enabled = settings.enabled;
-    host = settings.host;
-    port = settings.port;
-    keys = await listApiKeys();
-    lanIp = await getLanIp();
+    try {
+      const settings = await getHttpSettings();
+      enabled = settings.enabled;
+      host = settings.host;
+      port = settings.port;
+      restartNeeded = settings.restartRequired;
+      [keys, lanIp] = await Promise.all([listApiKeys(), getLanIp()]);
+    } catch (failure) {
+      errorMessage = failure instanceof Error ? failure.message : String(failure);
+    }
   });
 
+  /** Persist HTTP settings and show the restart state required by the embedded server.
+   * @return Completion after the settings have been saved.
+   * @throws Displays the backend error while keeping unsaved values in the form.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   async function saveSettings() {
+    if (!host.trim() || !Number.isInteger(port) || port < 1024 || port > 65535) {
+      errorMessage = 'Enter a host and a port between 1024 and 65535.';
+      return;
+    }
     saving = true;
+    errorMessage = '';
     try {
       await setHttpSettings(enabled, host, port);
       settingsChanged = false;
       restartNeeded = true;
       showPhoneLinkModal = false;
+    } catch (failure) {
+      errorMessage = failure instanceof Error ? failure.message : String(failure);
     } finally {
       saving = false;
     }
   }
 
+  /** Mark the current HTTP form as needing persistence.
+   * @return No value; the form remains in the pending state.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   function markChanged() {
     settingsChanged = true;
+    errorMessage = '';
     showPhoneLinkModal = false;
   }
 
+  /** Create an API key and refresh the visible key metadata.
+   * @param label User-facing API key label.
+   * @return Completion after the key list has been refreshed.
+   * @throws Displays the backend error without losing the form state.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   async function createKey(label: string) {
     if (!label.trim()) return;
     generatingKey = true;
+    errorMessage = '';
     try {
       justCreatedKey = await generateApiKey(label.trim());
       advancedLabel = '';
       showPhoneLinkModal = true;
       keys = await listApiKeys();
+    } catch (failure) {
+      errorMessage = failure instanceof Error ? failure.message : String(failure);
     } finally {
       generatingKey = false;
     }
@@ -105,21 +144,42 @@
     await createKey(nextPhoneLabel());
   }
 
+  /** Revoke an API key and refresh the visible key metadata.
+   * @param id API key identifier to revoke.
+   * @return Completion after the key list has been refreshed.
+   * @throws Displays the backend error when revocation fails.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   async function deleteKey(id: string) {
-    await revokeApiKey(id);
-    keys = await listApiKeys();
-    if (justCreatedKey?.id === id) {
-      justCreatedKey = null;
-      showPhoneLinkModal = false;
+    errorMessage = '';
+    try {
+      await revokeApiKey(id);
+      keys = await listApiKeys();
+      if (justCreatedKey?.id === id) {
+        justCreatedKey = null;
+        showPhoneLinkModal = false;
+      }
+    } catch (failure) {
+      errorMessage = failure instanceof Error ? failure.message : String(failure);
     }
   }
 
+  /** Reset active sessions and their persisted session-owned data.
+   * @return Completion after the reset command succeeds.
+   * @throws Displays the backend error and keeps the confirmation dialog open.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   async function handleReset() {
     resetting = true;
+    errorMessage = '';
     try {
       await resetSessions();
       confirmReset = false;
       dispatch('close');
+    } catch (failure) {
+      errorMessage = failure instanceof Error ? failure.message : String(failure);
     } finally {
       resetting = false;
     }
@@ -149,6 +209,10 @@
       on:click={() => (activeTab = 'danger')}>danger zone</button
     >
   </div>
+
+  {#if errorMessage}
+    <p class="error" role="alert">{errorMessage}</p>
+  {/if}
 
   {#if activeTab === 'mobile'}
     <div class="tab-content">
@@ -288,6 +352,12 @@
 
         {#if host !== '127.0.0.1' && host !== 'localhost'}
           <div class="warn">binding to {host} exposes the API to the network</div>
+        {/if}
+
+        {#if settingsChanged}
+          <button class="btn primary" on:click={saveSettings} disabled={saving}>
+            {saving ? 'saving...' : 'save server settings'}
+          </button>
         {/if}
       </div>
 
@@ -633,6 +703,17 @@
     padding: var(--sp-2) var(--sp-3);
     background: rgba(245, 166, 35, 0.08);
     border-radius: var(--radius-sm);
+  }
+
+  .error {
+    margin: 0;
+    padding: var(--sp-3) var(--sp-4);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-sm);
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--error, #ef4444);
+    font-size: var(--xs);
+    line-height: 1.5;
   }
 
   .btn {

@@ -145,7 +145,7 @@ fn scan_for_response(
     Err("codex app-server closed before answering".into())
 }
 
-/// Convert one `RateLimitWindow` into Orbit's quota window shape.
+/// Convert one `RateLimitWindow` into Orbit-mode's quota window shape.
 ///
 /// The app-server reports `primary`/`secondary` with an explicit window length, so the
 /// bucket is chosen by duration rather than by field order.

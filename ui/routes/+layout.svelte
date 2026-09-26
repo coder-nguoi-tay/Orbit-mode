@@ -31,7 +31,7 @@
 
   onMount(() => {
     const errorHandler = (event: ErrorEvent) => {
-      console.error('[Orbit Debug Catcher] Error:', event);
+      console.error('[Orbit-mode Debug Catcher] Error:', event);
       uncaughtError = {
         message: event.message || String(event.error),
         stack: event.error?.stack,
@@ -42,7 +42,7 @@
     };
 
     const rejectionHandler = (event: PromiseRejectionEvent) => {
-      console.error('[Orbit Debug Catcher] Unhandled Rejection:', event);
+      console.error('[Orbit-mode Debug Catcher] Unhandled Rejection:', event);
       const reason = event.reason;
       uncaughtError = {
         message: reason instanceof Error ? reason.message : String(reason),

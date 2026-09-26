@@ -1007,6 +1007,13 @@ impl DatabaseService {
         Ok(())
     }
 
+    /// Delete one session and every record owned by that session.
+    ///
+    /// @param id Session whose outputs, usage samples and account history should be removed.
+    /// @return Success after all session-owned records are deleted.
+    /// @throws rusqlite::Error If SQLite cannot complete the transaction.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
     pub fn delete_session(&self, id: SessionId) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch("BEGIN")?;
@@ -1014,15 +1021,34 @@ impl DatabaseService {
             "DELETE FROM session_outputs WHERE session_id = ?1",
             params![id],
         )?;
+        conn.execute(
+            "DELETE FROM session_usage_snapshots WHERE session_id = ?1",
+            params![id],
+        )?;
+        conn.execute(
+            "DELETE FROM session_account_history WHERE session_id = ?1",
+            params![id],
+        )?;
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         conn.execute_batch("COMMIT")?;
         Ok(())
     }
 
+    /// Delete all sessions and every record owned by those sessions.
+    ///
+    /// Provider quota snapshots remain because they describe provider accounts rather than a
+    /// particular session; session usage history is removed with the reset operation.
+    ///
+    /// @return Success after all session-owned records are deleted.
+    /// @throws rusqlite::Error If SQLite cannot complete the reset transaction.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
     pub fn delete_all_sessions(&self) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch("PRAGMA foreign_keys = OFF")?;
         conn.execute_batch("DELETE FROM session_outputs")?;
+        conn.execute_batch("DELETE FROM session_usage_snapshots")?;
+        conn.execute_batch("DELETE FROM session_account_history")?;
         conn.execute_batch("DELETE FROM sessions")?;
         conn.execute_batch("PRAGMA foreign_keys = ON")?;
         Ok(())
@@ -1200,6 +1226,7 @@ impl DatabaseService {
         let mut stmt = conn.prepare(
             "SELECT provider, account_key, provider_account_id, window_type, utilization, reset_at, status, source, created_at
              FROM provider_quota_snapshots
+             WHERE reset_at IS NULL OR reset_at > unixepoch()
              ORDER BY id DESC",
         )?;
         let mut map: std::collections::HashMap<(String, String), crate::models::ProviderQuota> =
@@ -1399,8 +1426,42 @@ impl DatabaseService {
             .collect::<SqlResult<Vec<_>>>()
             .unwrap_or_default();
 
+        // Usage snapshots contain cumulative session totals. Calculate hourly
+        // deltas so repeated token_count events are not counted multiple times.
+        let mut history_stmt = conn.prepare(
+            "WITH ordered AS (
+                SELECT session_id, created_at, total_tokens,
+                       LAG(total_tokens) OVER (
+                           PARTITION BY session_id ORDER BY id
+                       ) AS previous_total_tokens
+                FROM session_usage_snapshots
+            )
+            SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at) AS bucket_start,
+                   SUM(
+                       CASE
+                           WHEN total_tokens > COALESCE(previous_total_tokens, 0)
+                           THEN total_tokens - COALESCE(previous_total_tokens, 0)
+                           ELSE 0
+                       END
+                   ) AS total_tokens
+            FROM ordered
+            WHERE created_at >= datetime('now', '-30 days')
+            GROUP BY bucket_start
+            ORDER BY bucket_start",
+        )?;
+        let token_usage_history = history_stmt
+            .query_map([], |row| {
+                Ok(crate::models::TokenUsageHistoryPoint {
+                    bucket_start: row.get(0)?,
+                    total_tokens: row.get::<_, i64>(1)? as u64,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()
+            .unwrap_or_default();
+
         // Release the connection mutex before calling the helper. The helper acquires
         // the same mutex and would otherwise deadlock because Mutex is not re-entrant.
+        drop(history_stmt);
         drop(model_stmt);
         drop(proj_stmt);
         drop(conn);
@@ -1414,6 +1475,7 @@ impl DatabaseService {
             quotas,
             project_summaries,
             model_summaries,
+            token_usage_history,
         })
     }
 }
@@ -2256,6 +2318,95 @@ mod tests {
 
         assert_eq!(overview.total_tokens_today, 0);
         assert!(overview.quotas.is_empty());
+    }
+
+    /// Verify resetting sessions also removes usage history owned by those sessions.
+    ///
+    /// @return No value; assertions verify the usage dashboard is empty after reset.
+    /// @throws Panic If session usage cannot be recorded or removed.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_clear_session_usage_when_deleting_all_sessions() {
+        let database = make_db();
+        let session_id = database
+            .create_session(
+                None,
+                Some("Agent"),
+                "/tmp/reset-usage",
+                "ignore",
+                None,
+                Some("codex"),
+                None,
+                None,
+            )
+            .unwrap();
+        database
+            .record_session_usage(
+                session_id,
+                None,
+                "codex",
+                Some("gpt-5"),
+                &crate::models::TokenUsage {
+                    input: 100,
+                    total: 100,
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+
+        database.delete_all_sessions().unwrap();
+
+        let overview = database.get_usage_overview().unwrap();
+        assert_eq!(overview.total_tokens_today, 0);
+        assert!(overview.token_usage_history.is_empty());
+    }
+
+    /// Verify hourly history uses cumulative-token deltas instead of summing repeated snapshots.
+    ///
+    /// @return No value; assertions verify one session contributes only newly used tokens.
+    /// @throws Panic If the usage history query cannot read the recorded snapshots.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-26
+    #[test]
+    fn should_build_token_usage_history_from_cumulative_deltas() {
+        let database = make_db();
+        let session_id = database
+            .create_session(
+                None,
+                Some("Agent"),
+                "/tmp/usage-history",
+                "ignore",
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        for total in [100, 175, 300] {
+            database
+                .record_session_usage(
+                    session_id,
+                    None,
+                    "codex",
+                    Some("gpt-5"),
+                    &crate::models::TokenUsage {
+                        input: total,
+                        total,
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+
+        let overview = database
+            .get_usage_overview()
+            .expect("usage overview should include token history");
+        assert_eq!(overview.token_usage_history.len(), 1);
+        assert_eq!(overview.token_usage_history[0].total_tokens, 300);
     }
 
     /// Verify checked profiles are selected one time each without returning to an exhausted account.

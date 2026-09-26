@@ -244,6 +244,7 @@ pub fn get_usage_overview(
             quotas: vec![],
             project_summaries: vec![],
             model_summaries: vec![],
+            token_usage_history: vec![],
         })
 }
 
@@ -336,6 +337,40 @@ pub async fn refresh_codex_quotas(
                 }
             })
             .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| crate::ipc::IpcError::Other(format!("quota read task failed: {e}")))?;
+
+    for quota in &quotas {
+        let _ = app.emit("provider:quota-updated", quota);
+    }
+    Ok(quotas)
+}
+
+#[tauri::command]
+pub async fn refresh_claude_quotas(
+    state: tauri::State<'_, crate::ipc::session::SessionState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::models::ProviderQuota>, crate::ipc::IpcError> {
+    use tauri::Emitter;
+
+    let db = std::sync::Arc::clone(&state.read().db);
+
+    let quotas = tauri::async_runtime::spawn_blocking(move || {
+        let Some(executable) = crate::services::spawn_manager::find_claude() else {
+            return Vec::new();
+        };
+
+        match crate::services::claude_quota::fetch_claude_quota(&executable, "default", None) {
+            Ok(quota) => {
+                let _ = db.record_provider_quota(&quota);
+                vec![quota]
+            }
+            Err(error) => {
+                eprintln!("[orbit:quota] claude read failed: {error}");
+                Vec::new()
+            }
+        }
     })
     .await
     .map_err(|e| crate::ipc::IpcError::Other(format!("quota read task failed: {e}")))?;

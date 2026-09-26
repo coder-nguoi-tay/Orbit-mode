@@ -1,7 +1,7 @@
 const COMMANDS = {
-  linux: 'curl -fsSL https://raw.githubusercontent.com/xinnaider/orbit/master/scripts/install-linux.sh | bash',
-  mac: 'curl -fsSL https://raw.githubusercontent.com/xinnaider/orbit/master/scripts/install-macos.sh | bash',
-  win: 'irm https://raw.githubusercontent.com/xinnaider/orbit/master/scripts/install-windows.ps1 | iex',
+  linux: 'curl -fsSL https://raw.githubusercontent.com/coder-nguoi-tay/Orbit-mode/master/scripts/install-linux.sh | bash',
+  mac: 'curl -fsSL https://raw.githubusercontent.com/coder-nguoi-tay/Orbit-mode/master/scripts/install-macos.sh | bash',
+  win: 'irm https://raw.githubusercontent.com/coder-nguoi-tay/Orbit-mode/master/scripts/install-windows.ps1 | iex',
 };
 
 const LABELS = {

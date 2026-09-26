@@ -89,6 +89,11 @@ export interface ModelUsageSummary {
   sessionCount: number;
 }
 
+export interface TokenUsageHistoryPoint {
+  bucketStart: string;
+  totalTokens: number;
+}
+
 export interface UsageOverview {
   totalTokensToday: number;
   totalCostToday: number;
@@ -97,6 +102,7 @@ export interface UsageOverview {
   quotas: ProviderQuota[];
   projectSummaries: ProjectUsageSummary[];
   modelSummaries: ModelUsageSummary[];
+  tokenUsageHistory: TokenUsageHistoryPoint[];
 }
 
 export interface MiniLogEntry {

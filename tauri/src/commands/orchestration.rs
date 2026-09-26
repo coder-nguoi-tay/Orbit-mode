@@ -7,7 +7,7 @@ use std::path::Path;
 #[tauri::command]
 pub fn setup_orchestration(project_path: String) -> Result<String, IpcError> {
     let launch = mcp_config::mcp_launch()
-        .ok_or_else(|| IpcError::Other("Orbit MCP launch command not found".to_string()))?;
+        .ok_or_else(|| IpcError::Other("Orbit-mode MCP launch command not found".to_string()))?;
 
     mcp_config::write_orbit_mcp_configs(Path::new(&project_path), &launch)
         .map_err(IpcError::Other)?;

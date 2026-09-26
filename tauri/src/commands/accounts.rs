@@ -695,7 +695,7 @@ pub fn remove_provider_account(
             || home.file_name().and_then(|name| name.to_str()) != Some(account_id.as_str())
         {
             return Err(IpcError::Other(
-                "Profile path is outside Orbit's managed root".into(),
+                "Profile path is outside Orbit-mode's managed root".into(),
             ));
         }
         std::fs::remove_dir_all(home)?;

@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "version": "6.0.2",
-  "description": "Orbit — multi-session Claude Code agent dashboard",
+  "description": "Orbit-mode — multi-session AI coding agent dashboard",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

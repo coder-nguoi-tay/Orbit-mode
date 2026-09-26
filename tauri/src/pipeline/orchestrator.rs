@@ -429,7 +429,7 @@ fn emit_pipeline_state(db: &Arc<DatabaseService>, app: &AppHandle, id: PipelineI
 
 fn build_planner_prompt(pipeline: &Pipeline) -> String {
     format!(
-        r#"You are the Planner agent in an Orbit multi-agent development pipeline.
+        r#"You are the Planner agent in an Orbit-mode multi-agent development pipeline.
 
 Your task is to analyze the following user request and produce a detailed implementation plan.
 
@@ -465,7 +465,7 @@ Your task is to analyze the following user request and produce a detailed implem
 
 fn build_developer_prompt(pipeline: &Pipeline, plan_text: &str) -> String {
     format!(
-        r#"You are the Developer agent in an Orbit multi-agent development pipeline.
+        r#"You are the Developer agent in an Orbit-mode multi-agent development pipeline.
 
 The Planner has produced the following implementation plan. Your job is to implement it.
 

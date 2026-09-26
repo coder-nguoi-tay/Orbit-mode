@@ -6,7 +6,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -17,10 +17,12 @@ use tower_http::services::ServeDir;
 
 use crate::agent_tree;
 use crate::commands::providers::{build_cli_backends, normalize_session_provider_model};
+use crate::ipc::http_api::{ApiKeyCreated, ApiKeyInfo, HttpSettingsInfo};
 use crate::models::{JournalEntryType, SessionId};
 use crate::providers::ProviderRegistry;
 use crate::services::database::DatabaseService;
 use crate::services::session_manager::SessionManager;
+use uuid::Uuid;
 
 // ── Shared state ────────────────────────────────────────────────
 
@@ -70,6 +72,12 @@ pub fn hash_api_key(key: &str) -> String {
 
 // ── Router ──────────────────────────────────────────────────────
 
+/// Build the authenticated HTTP API and optional static frontend service.
+///
+/// @param state Shared application state used by REST handlers and WebSocket streaming.
+/// @return Axum router for the embedded Orbit-mode server.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 pub fn build_router(state: HttpState) -> Router {
     let frontend_dir = state.frontend_dir.clone();
 
@@ -84,7 +92,14 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/api/sessions/{id}/journal", get(get_journal))
         .route("/api/sessions/{id}/rename", post(rename_session))
         .route("/api/sessions/{id}", axum::routing::delete(delete_session))
+        .route("/api/sessions/reset", post(reset_sessions))
         .route("/api/providers", get(list_providers))
+        .route("/api/api-keys", get(list_api_keys).post(generate_api_key))
+        .route("/api/api-keys/{id}", delete(revoke_api_key))
+        .route(
+            "/api/settings/http",
+            get(get_http_settings).post(set_http_settings),
+        )
         .route("/api/ws", get(ws_handler))
         .route("/api/health", get(health))
         .layer(CorsLayer::permissive())
@@ -101,7 +116,17 @@ pub fn build_router(state: HttpState) -> Router {
 
 // ── Start server ────────────────────────────────────────────────
 
+/// Start the embedded HTTP server and clear the persisted restart marker after binding succeeds.
+///
+/// @param state Shared application state used by the router.
+/// @param host Address to bind.
+/// @param port Port to bind.
+/// @return Success when the server loop exits normally.
+/// @throws String If the bind address is invalid, binding fails or Axum stops with an error.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 pub async fn start(state: HttpState, host: &str, port: u16) -> Result<(), String> {
+    let restart_db = Arc::clone(&state.db);
     let router = build_router(state);
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
@@ -112,6 +137,10 @@ pub async fn start(state: HttpState, host: &str, port: u16) -> Result<(), String
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("Failed to bind {addr}: {e}"))?;
+
+    if let Err(error) = restart_db.set_http_setting("restart_required", "false") {
+        eprintln!("[orbit:http] failed to clear restart marker: {error}");
+    }
 
     axum::serve(listener, router)
         .await
@@ -468,6 +497,212 @@ async fn list_providers(
     serde_json::to_value(backends)
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[derive(Deserialize)]
+struct ApiKeyBody {
+    label: String,
+}
+
+/// Generate one API key through the authenticated web Settings screen.
+///
+/// @param state Shared HTTP application state.
+/// @param headers Request headers containing the API bearer token.
+/// @param body API key label submitted by the user.
+/// @return Newly created key, including its one-time secret.
+/// @throws StatusCode If authentication, validation or persistence fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+async fn generate_api_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<ApiKeyBody>,
+) -> Result<Json<ApiKeyCreated>, StatusCode> {
+    validate_bearer(&state.db, &headers)?;
+    let label = body.label.trim();
+    if label.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let key = format!("orbit_{}", Uuid::new_v4().simple());
+    state
+        .db
+        .create_api_key(
+            &id,
+            label,
+            &crate::services::http_server::hash_api_key(&key),
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(ApiKeyCreated {
+        id,
+        label: label.to_string(),
+        key,
+    }))
+}
+
+/// List API key metadata without exposing stored secrets.
+///
+/// @param state Shared HTTP application state.
+/// @param headers Request headers containing the API bearer token.
+/// @return API key IDs, labels and creation timestamps.
+/// @throws StatusCode If authentication or persistence fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+async fn list_api_keys(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ApiKeyInfo>>, StatusCode> {
+    validate_bearer(&state.db, &headers)?;
+    let keys = state
+        .db
+        .list_api_keys()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|(id, label, created_at)| ApiKeyInfo {
+            id,
+            label,
+            created_at,
+        })
+        .collect();
+    Ok(Json(keys))
+}
+
+/// Revoke an API key from the authenticated web Settings screen.
+///
+/// @param state Shared HTTP application state.
+/// @param headers Request headers containing the API bearer token.
+/// @param id API key ID to revoke.
+/// @return Whether an existing key was deleted.
+/// @throws StatusCode If authentication or persistence fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+async fn revoke_api_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<bool>, StatusCode> {
+    validate_bearer(&state.db, &headers)?;
+    state
+        .db
+        .delete_api_key(&id)
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpSettingsBody {
+    enabled: bool,
+    host: String,
+    port: u16,
+}
+
+/// Read HTTP server settings for the authenticated web Settings screen.
+///
+/// @param state Shared HTTP application state.
+/// @param headers Request headers containing the API bearer token.
+/// @return Persisted server settings and restart status.
+/// @throws StatusCode If authentication or persistence fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+async fn get_http_settings(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<HttpSettingsInfo>, StatusCode> {
+    validate_bearer(&state.db, &headers)?;
+    let enabled = state
+        .db
+        .get_http_setting("enabled")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_some_and(|value| value == "true");
+    let host = state
+        .db
+        .get_http_setting("host")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = state
+        .db
+        .get_http_setting("port")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(9999);
+    let restart_required = state
+        .db
+        .get_http_setting("restart_required")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_some_and(|value| value == "true");
+
+    Ok(Json(HttpSettingsInfo {
+        enabled,
+        host,
+        port,
+        restart_required,
+    }))
+}
+
+/// Persist HTTP server settings from the authenticated web Settings screen.
+///
+/// @param state Shared HTTP application state.
+/// @param headers Request headers containing the API bearer token.
+/// @param body New server settings.
+/// @return Confirmation that the settings were persisted.
+/// @throws StatusCode If authentication, validation or persistence fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+async fn set_http_settings(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<HttpSettingsBody>,
+) -> Result<Json<Value>, StatusCode> {
+    validate_bearer(&state.db, &headers)?;
+    let host = body.host.trim();
+    if host.is_empty() || !(1024..=65535).contains(&body.port) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    state
+        .db
+        .set_http_setting("enabled", if body.enabled { "true" } else { "false" })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .db
+        .set_http_setting("host", host)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .db
+        .set_http_setting("port", &body.port.to_string())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .db
+        .set_http_setting("restart_required", "true")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(json!({ "saved": true })))
+}
+
+/// Reset all sessions through the authenticated web Settings screen.
+///
+/// @param state Shared HTTP application state.
+/// @param headers Request headers containing the API bearer token.
+/// @return Confirmation after active sessions and session-owned data are removed.
+/// @throws StatusCode If authentication or session cleanup fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
+async fn reset_sessions(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    validate_bearer(&state.db, &headers)?;
+    state
+        .session_manager
+        .write()
+        .unwrap_or_else(|error| error.into_inner())
+        .reset_all_sessions()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _ = state.app.emit("session:reset", json!({}));
+    Ok(Json(json!({ "reset": true })))
 }
 
 // ── WebSocket for streaming session output ──────────────────────

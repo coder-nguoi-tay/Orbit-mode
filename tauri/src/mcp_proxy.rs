@@ -9,14 +9,14 @@ const SOCKET_NAME: &str = "orbit-mcp";
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn parent_session_id() -> Option<i64> {
-    // 1. Explicit env var (set by Orbit if propagated)
+    // 1. Explicit env var (set by Orbit-mode if propagated)
     if let Some(id) = std::env::var("ORBIT_SESSION_ID")
         .ok()
         .and_then(|s| s.parse().ok())
     {
         return Some(id);
     }
-    // 2. PID file: Orbit writes {tmp}/orbit-session-{cli_pid}.id when spawning.
+    // 2. PID file: Orbit-mode writes {tmp}/orbit-session-{cli_pid}.id when spawning.
     //    Walk up the process tree to find a matching PID file.
     let ppid = get_parent_pid()?;
     try_pid_file(ppid).or_else(|| {
@@ -147,7 +147,9 @@ pub fn run() {
                 eprintln!("[orbit-mcp] IPC unavailable — connecting via HTTP to {url}");
                 http_connected_mode(&url);
             } else {
-                eprintln!("[orbit-mcp] Orbit app not running — MCP operating in standalone mode");
+                eprintln!(
+                    "[orbit-mcp] Orbit-mode app not running — MCP operating in standalone mode"
+                );
                 standalone::run();
             }
         }

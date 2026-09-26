@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { ProviderQuota } from '../types';
 
-const { mockGetUsageOverview, mockRefreshCodexQuotas } = vi.hoisted(() => ({
-  mockGetUsageOverview: vi.fn(),
-  mockRefreshCodexQuotas: vi.fn(),
-}));
+const { mockGetUsageOverview, mockRefreshCodexQuotas, mockRefreshClaudeQuotas } = vi.hoisted(
+  () => ({
+    mockGetUsageOverview: vi.fn(),
+    mockRefreshCodexQuotas: vi.fn(),
+    mockRefreshClaudeQuotas: vi.fn(),
+  })
+);
 
 vi.mock('../tauri/usage', () => ({
   getUsageOverview: mockGetUsageOverview,
   refreshCodexQuotas: mockRefreshCodexQuotas,
+  refreshClaudeQuotas: mockRefreshClaudeQuotas,
 }));
 vi.mock('../tauri/events', () => ({
   onSessionUsageUpdated: vi.fn(),
@@ -36,6 +40,7 @@ beforeEach(() => {
   providerQuotas.set([]);
   mockGetUsageOverview.mockResolvedValue({ quotas: [] });
   mockRefreshCodexQuotas.mockResolvedValue([]);
+  mockRefreshClaudeQuotas.mockResolvedValue([]);
 });
 
 describe('account quota updates', () => {

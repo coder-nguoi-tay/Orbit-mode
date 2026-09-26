@@ -1,12 +1,12 @@
-# Contributing to Orbit
+# Contributing to Orbit-mode
 
 Contributions are welcome! Here's how to get started.
 
 ## Setup
 
 ```bash
-git clone https://github.com/xinnaider/orbit.git
-cd orbit
+git clone https://github.com/coder-nguoi-tay/Orbit-mode.git
+cd Orbit-mode
 npm install
 npm run tauri:dev
 ```
@@ -30,4 +30,4 @@ All checks must pass. The CI will verify automatically.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same [CC BY-NC 4.0](LICENSE) license as the project.
+By contributing, you agree that your contributions will be licensed under the same [MIT](LICENSE) license as the project.

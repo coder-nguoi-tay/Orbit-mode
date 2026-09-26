@@ -67,6 +67,13 @@ type Args = Record<string, any>;
 /**
  * Route a Tauri command to the matching HTTP endpoint.
  * Commands that don't have a REST mapping return a sensible default.
+ *
+ * @param cmd Tauri command name requested by the shared UI.
+ * @param args Command arguments sent to the REST endpoint.
+ * @return Response converted to the requested command type.
+ * @throws Error When the HTTP API rejects the request.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-26
  */
 export async function webInvoke<T>(cmd: string, args?: Args): Promise<T> {
   switch (cmd) {
@@ -103,6 +110,9 @@ export async function webInvoke<T>(cmd: string, args?: Args): Promise<T> {
 
     case 'delete_session':
       return apiDelete(`/sessions/${args!.sessionId}`) as Promise<T>;
+
+    case 'reset_sessions':
+      return apiPost('/sessions/reset') as Promise<T>;
 
     case 'get_session_journal':
       return apiGet(`/sessions/${args!.sessionId}/journal`) as Promise<T>;
@@ -146,6 +156,9 @@ export async function webInvoke<T>(cmd: string, args?: Args): Promise<T> {
         host: args!.host,
         port: args!.port,
       }) as Promise<T>;
+
+    case 'get_lan_ip':
+      return (location.hostname || '127.0.0.1') as T;
 
     // ── Commands that are no-ops in web mode ──────────────────
     case 'get_provider_accounts':

@@ -28,6 +28,7 @@ pub struct HttpSettingsInfo {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+    pub restart_required: bool,
 }
 
 #[tauri::command]
@@ -75,6 +76,13 @@ pub fn revoke_api_key(
 }
 
 #[tauri::command]
+/// Read the persisted HTTP server settings and whether the desktop app needs a restart.
+///
+/// @param session_state Shared session state containing the application database.
+/// @return Current HTTP server settings for the Settings screen.
+/// @throws IpcError When the database state cannot be read.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 pub fn get_http_settings(
     session_state: State<'_, crate::ipc::session::SessionState>,
 ) -> Result<HttpSettingsInfo, IpcError> {
@@ -93,26 +101,49 @@ pub fn get_http_settings(
             .unwrap_or(None)
             .and_then(|v| v.parse().ok())
             .unwrap_or(9999);
+    let restart_required =
+        m.db.get_http_setting("restart_required")
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(false);
     Ok(HttpSettingsInfo {
         enabled,
         host,
         port,
+        restart_required,
     })
 }
 
 #[tauri::command]
+/// Persist HTTP server settings and mark the server for restart on the next app launch.
+///
+/// @param enabled Whether the embedded HTTP server should run after restart.
+/// @param host Address that the embedded HTTP server should bind to.
+/// @param port Port that the embedded HTTP server should bind to.
+/// @param session_state Shared session state containing the application database.
+/// @return Success after all settings are persisted.
+/// @throws IpcError When SQLite cannot persist one of the settings.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 pub fn set_http_settings(
     enabled: bool,
     host: String,
     port: u16,
     session_state: State<'_, crate::ipc::session::SessionState>,
 ) -> Result<(), IpcError> {
+    if host.trim().is_empty() || !(1024..=65535).contains(&port) {
+        return Err(IpcError::Other(
+            "HTTP settings require a host and a port between 1024 and 65535".to_string(),
+        ));
+    }
     let m = session_state.0.read().unwrap_or_else(|e| e.into_inner());
     m.db.set_http_setting("enabled", if enabled { "true" } else { "false" })
         .map_err(|e| IpcError::Other(e.to_string()))?;
-    m.db.set_http_setting("host", &host)
+    m.db.set_http_setting("host", host.trim())
         .map_err(|e| IpcError::Other(e.to_string()))?;
     m.db.set_http_setting("port", &port.to_string())
+        .map_err(|e| IpcError::Other(e.to_string()))?;
+    m.db.set_http_setting("restart_required", "true")
         .map_err(|e| IpcError::Other(e.to_string()))?;
     Ok(())
 }

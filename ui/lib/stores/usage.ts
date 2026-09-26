@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import type { ProviderQuota, SessionUsageSnapshot, UsageOverview } from '../types';
-import { getUsageOverview, refreshCodexQuotas } from '../tauri/usage';
+import { getUsageOverview, refreshCodexQuotas, refreshClaudeQuotas } from '../tauri/usage';
 import { onSessionUsageUpdated, onProviderQuotaUpdated } from '../tauri/events';
 
 export const usageOverview = writable<UsageOverview | null>(null);
@@ -80,6 +80,9 @@ export async function refreshUsageOverview() {
   // Started only after the persisted baseline is in place, so the live sample merges
   // on top of it instead of racing the `set` above.
   readLiveCodexQuotas();
+  refreshClaudeQuotas()
+    .then(applyQuotas)
+    .catch((err) => console.error('Failed to read live Claude quotas:', err));
 }
 
 /** Start one shared subscription for account quota and session usage events.

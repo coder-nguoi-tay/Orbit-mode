@@ -101,7 +101,8 @@
     {#if session.gitDirty}<span class="git-dirty" title="Uncommitted changes">●</span>{/if}
     {#if totalTokens > 0}
       <span class="tokens-badge" title="{totalTokens.toLocaleString()} tokens"
-        >{formatTokens(totalTokens)}</span>
+        >{formatTokens(totalTokens)}</span
+      >
     {/if}
     {#if ctxPercent > 0}
       <span

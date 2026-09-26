@@ -22,7 +22,8 @@ export interface McpStatus {
 
 export function mcpStatusLabel(status: McpStatus): string {
   if (status.orchestrationReady) return 'MCP ready';
-  if (status.binaryAvailable && !status.ipcListening) return 'MCP binary OK · start Orbit';
+  if (status.binaryAvailable && !status.ipcListening)
+    return 'MCP binary OK · start Orbit-mode';
   if (!status.binaryAvailable) return 'MCP unavailable';
   return 'MCP partial';
 }

@@ -54,7 +54,7 @@
   <text x="96" y="330"
     font-family="'DejaVu Sans Mono', 'Courier New', monospace"
     font-size="96" font-weight="600" fill="#f0f0f0" letter-spacing="8">
-    orbit
+    Orbit-mode
   </text>
 
   <!-- Subtitle -->
@@ -73,7 +73,7 @@
   <text x="100" y="530"
     font-family="'DejaVu Sans Mono', 'Courier New', monospace"
     font-size="14" fill="#303030" letter-spacing="2">
-    orbit.jfernando.dev  ·  Windows  ·  Linux
+    github.com/coder-nguoi-tay/Orbit-mode  ·  Windows  ·  Linux
   </text>
 
   <!-- Bottom border accent -->
