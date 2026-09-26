@@ -104,3 +104,23 @@ git checkout -b fix/chat-feed --no-track origin/dev
 **Vì sao:** Một thư mục lớn như `core` có thể vượt giới hạn trước khi bộ quét tới các thư mục và file ở root như `database`, `docker`, `composer.lock` hoặc `phpunit.xml`, làm Explorer hiển thị thiếu nhưng không báo lỗi.
 
 **Khi áp dụng:** Khi sửa API `list_project_files` hoặc UI Explorer của Orbit.
+
+---
+
+## Terminal Split Rendering
+
+**Quy tắc:** Khi chuyển workspace từ một pane sang hai pane, giữ nguyên instance của pane đang hiển thị và chỉ mount pane mới; loading overlay phải nằm ngoài luồng flex hoặc phủ tuyệt đối toàn bộ panel.
+
+**Vì sao:** Thay cả nhánh `PaneContainer` bằng `SplitContainer` làm chat dài bị unmount/mount lại trước frame đầu tiên, còn overlay và terminal cùng `flex: 1` khiến trạng thái loading chỉ rộng nửa panel.
+
+**Khi áp dụng:** Khi mở terminal, file editor hoặc utility pane dạng split từ một chat đang hoạt động.
+
+---
+
+## SvelteKit Build Trong Phiên Tauri Dev
+
+**Quy tắc:** Không chạy `npm run build` đồng thời với `npm run tauri:dev`; dừng hoặc khởi động lại phiên Tauri sau khi production build ghi vào `.svelte-kit`.
+
+**Vì sao:** WebView có thể giữ module graph của dev server trong lúc build thay generated runtime, tạo vòng import trộn phiên bản và lỗi TDZ như `Cannot access 'updated_listener' before initialization`.
+
+**Khi áp dụng:** Khi xác minh production build trong lúc cửa sổ Orbit development đang mở.

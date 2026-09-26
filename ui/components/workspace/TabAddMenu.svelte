@@ -36,7 +36,7 @@
 </script>
 
 <div class="menu" style="left: {menuLeft}px; top: {menuTop}px;" role="menu">
-  <button class="menu-item" role="menuitem" on:click={() => select('files')}>
+  <button class="menu-item" role="menuitem" on:click|stopPropagation={() => select('files')}>
     <FileCode size={14} />
     File editor
   </button>
@@ -44,7 +44,7 @@
     class="menu-item"
     data-testid="add-terminal-tab-option"
     role="menuitem"
-    on:click={() => select('terminal')}
+    on:click|stopPropagation={() => select('terminal')}
   >
     <Terminal size={14} />
     New terminal

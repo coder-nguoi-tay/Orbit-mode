@@ -58,6 +58,41 @@ To open the file editor: click the **+** button in the tab bar of any pane → *
 
 ---
 
+## Statistics & Monitoring
+
+Orbit-mode surfaces multiple layers of real-time and historical data so you always know what your agents are doing and what they have consumed.
+
+### Session feed
+
+![Session feed](media/session-feed.gif)
+
+Every session has a live streaming feed that renders:
+
+| Entry type | What you see |
+| --- | --- |
+| **Thinking** | Collapsible reasoning blocks from extended-thinking models |
+| **Tool calls** | Bash commands, file reads/writes with inline syntax-highlighted diffs |
+| **Assistant messages** | Full markdown with code blocks and inline formatting |
+| **System messages** | Permission prompts, model notices, context warnings |
+| **Progress** | Sub-task progress from long-running agent loops |
+
+### Session meta panel
+
+The right-hand panel shows live stats for the active session:
+
+- **Context window** — percentage used, shown as a progress bar that turns amber near the limit.
+- **Token breakdown** — input, output, cache-read, and cache-write token counts updated in real time.
+- **Estimated cost** — calculated from current model pricing for every token category.
+- **Mini-log** — the last N tool calls (tool name, target file, success/fail) without opening the full feed.
+- **Tasks** — task list parsed from the agent's structured output, with `pending`, `in_progress`, and `completed` states.
+- **Sub-agents** — native Claude Code sub-agents appearing as expandable cards under the parent session.
+
+### Rate-limit & quota
+
+When Claude Code hits a rate limit, a banner appears immediately in the app with the reset countdown. Quota data is captured from the live `rate_limit_event` emitted by the CLI — no polling required.
+
+---
+
 ## Agent Usage Control Center
 
 A unified view of token consumption and quota across all agents and providers.
@@ -139,6 +174,60 @@ Orbit-mode includes a built-in MCP server so agents can create and control other
 | `orbit_get_subagents` | Get the sub-agent tree for a session |
 
 MCP is configured automatically when a session starts. For SSH sessions, the app passes the HTTP connection details to the sidecar so remote agents can connect back to the desktop.
+
+---
+
+## Integrations
+
+### SSH remote sessions
+
+![SSH session](media/ssh-session.gif)
+
+Run any provider on a remote machine without leaving the desktop app:
+
+1. Create a session and toggle **SSH**.
+2. Enter host, user, port, and optional password or key path.
+3. Orbit-mode connects, locates the provider CLI on the remote machine, and streams output back exactly like a local session.
+4. The built-in MCP sidecar is forwarded over the tunnel so remote agents can orchestrate other sessions on your desktop.
+
+Credentials are stored AES-256-GCM encrypted in the local database. The encryption key is tied to the app data directory and never leaves the machine.
+
+### Git worktrees
+
+Create a session in an **isolated Git worktree** so multiple agents can work on the same repository simultaneously without conflicting:
+
+- Each session can target a separate worktree directory.
+- Worktrees are created and cleaned up automatically.
+- Diffs shown in the feed always reflect the worktree's branch, not the main working tree.
+
+### Web dashboard & mobile access
+
+![Mobile dashboard](media/mobile-access.gif)
+
+Access the full session dashboard from any browser on your network:
+
+- Enable **Web access** in Settings and set the bind address to `0.0.0.0`.
+- Open the URL on a phone or tablet — the same UI, fully responsive.
+- Secure the endpoint with an API key generated in the **Server & keys** section.
+- For cross-network access (phone on LTE, laptop on Wi-Fi), use Tailscale or a corporate VPN and connect via the machine's Tailscale IP.
+
+### Provider integrations
+
+| Provider | Notes |
+| --- | --- |
+| **Claude Code** | Full streaming, thinking blocks, quota from rate-limit events, extended effort |
+| **Codex** | Multi-account profiles, per-account quota via `codex app-server`, effort control |
+| **OpenCode** | Custom provider support via `~/.config/opencode/opencode.json`, model prefix routing |
+| **Gemini CLI** | Spawn and monitor Gemini CLI sessions |
+| **Copilot CLI** | Spawn and monitor GitHub Copilot CLI sessions |
+
+Adding a new provider requires only a single `providers/<name>.rs` file implementing the `Provider` trait — no changes to the session manager or IPC layer.
+
+### MCP tool calling (external agents)
+
+Any MCP-compatible client (Claude Code, another Orbit-mode session, a custom script) can connect to Orbit-mode's local IPC socket and control sessions programmatically using the 7 tools listed in the [MCP Orchestrator](#mcp-orchestrator) section above.
+
+Sub-agents created via MCP appear as nested cards under the parent session in the sidebar, with their own feed, token counters, and status badges.
 
 ---
 

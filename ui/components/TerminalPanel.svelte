@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Terminal } from '@xterm/xterm';
-  import { FitAddon } from '@xterm/addon-fit';
+  import type { ITheme, Terminal as XtermTerminal } from '@xterm/xterm';
+  import type { FitAddon as XtermFitAddon } from '@xterm/addon-fit';
   import { ptyCreate, ptyWrite, ptyResize, ptyKill, onPtyOutput } from '../lib/tauri/terminal';
   import PanelHeader from './workspace/PanelHeader.svelte';
   import { shortenPath } from '../lib/path';
@@ -23,13 +23,14 @@
   } = $props();
 
   let container: HTMLDivElement | undefined = $state();
-  let terminal: Terminal | undefined = $state();
-  let fitAddon: FitAddon | undefined = $state();
+  let terminal: XtermTerminal | undefined = $state();
+  let fitAddon: XtermFitAddon | undefined = $state();
   let unlisten: (() => void) | undefined = $state();
   let resizeObserver: ResizeObserver | undefined = $state();
 
-  let loading = $state(false);
+  let loading = $state(true);
   let error = $state('');
+  let destroyed = false;
   // The numeric PTY id used for all pty* calls.
   let numericId = $state(0);
   // Whether we spawned the PTY ourselves (and must kill it on destroy).
@@ -51,7 +52,12 @@
     return Date.now();
   }
 
-  function cyberpunkTermTheme(): Terminal['options']['theme'] {
+  /** Build the xterm color theme used by the embedded project shell.
+   * @return Terminal colors matching the current cyberpunk interface.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
+  function cyberpunkTermTheme(): ITheme {
     return {
       background: '#060709',
       foreground: '#e2fbe8',
@@ -78,12 +84,22 @@
     };
   }
 
-  async function spawnPty(term: Terminal, fit: FitAddon): Promise<void> {
+  /** Spawn the platform login shell in the active project's directory.
+   * @param term Initialized xterm instance used to determine terminal dimensions.
+   * @param fit Loaded fit addon used before PTY creation.
+   * @return Completion after the native PTY has started.
+   * @throws Error When the native PTY cannot be created.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
+  async function spawnPty(term: XtermTerminal, fit: XtermFitAddon): Promise<void> {
     const isWindows = typeof navigator !== 'undefined' && navigator.platform.startsWith('Win');
-    const isMac = typeof navigator !== 'undefined' && (navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Mac'));
-    const shell = isWindows ? 'powershell.exe' : (isMac ? '/bin/zsh' : '/bin/bash');
+    const isMac =
+      typeof navigator !== 'undefined' &&
+      (navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Mac'));
+    const shell = isWindows ? 'powershell.exe' : isMac ? '/bin/zsh' : '/bin/bash';
     const args = isWindows ? [] : ['-l'];
-    
+
     // Get current terminal dimensions before spawning
     fit.fit();
     const rows = term.rows || 24;
@@ -92,11 +108,22 @@
     await ptyCreate(numericId, shell, args, cwd, [], rows, cols);
   }
 
+  /** Lazily load xterm after the terminal pane has already painted.
+   * @return Completion after xterm and the native shell are ready.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   async function initTerminal(): Promise<void> {
-    if (!container) return;
+    if (!container || destroyed) return;
 
     loading = true;
     error = '';
+
+    const [{ Terminal }, { FitAddon }] = await Promise.all([
+      import('@xterm/xterm'),
+      import('@xterm/addon-fit'),
+    ]);
+    if (!container || destroyed) return;
 
     const term = new Terminal({
       cursorBlink: true,
@@ -109,6 +136,8 @@
       allowTransparency: true,
       fontWeight: '400',
       fontWeightBold: '700',
+      macOptionIsMeta: true,
+      macOptionClickForcesSelection: false,
     });
 
     const fit = new FitAddon();
@@ -201,11 +230,17 @@
     initTerminal();
   }
 
-  onMount(async () => {
-    await initTerminal();
+  onMount(() => {
+    destroyed = false;
+    const paintFrame = requestAnimationFrame(() => {
+      window.setTimeout(() => void initTerminal(), 0);
+    });
+
+    return () => cancelAnimationFrame(paintFrame);
   });
 
   onDestroy(() => {
+    destroyed = true;
     resizeObserver?.disconnect();
     unlisten?.();
     terminal?.dispose();
@@ -248,10 +283,7 @@
     {:else if error}
       <div class="terminal-overlay">
         <span class="terminal-status error">{error}</span>
-        <button
-          class="retry-btn"
-          onclick={restartTerminal}>Retry</button
-        >
+        <button class="retry-btn" onclick={restartTerminal}>Retry</button>
       </div>
     {/if}
 
@@ -327,8 +359,15 @@
   }
 
   @keyframes cyberPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.8); }
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.4;
+      transform: scale(0.8);
+    }
   }
 
   .tool-btn {
@@ -363,7 +402,9 @@
     overflow: hidden;
     margin: 0;
     position: relative;
-    box-shadow: inset 0 1px 0 0 rgba(0, 255, 136, 0.12), inset 0 0 30px -10px rgba(0, 255, 136, 0.03);
+    box-shadow:
+      inset 0 1px 0 0 rgba(0, 255, 136, 0.12),
+      inset 0 0 30px -10px rgba(0, 255, 136, 0.03);
   }
 
   .terminal-shell :global(.xterm) {
@@ -388,14 +429,21 @@
     overflow: hidden;
   }
 
+  .terminal-panel.hidden {
+    visibility: hidden;
+  }
+
   .terminal-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 12px;
-    flex: 1;
     padding: 24px;
+    background: #060709;
   }
 
   .terminal-status {
@@ -421,7 +469,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .retry-btn {
