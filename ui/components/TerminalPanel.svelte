@@ -5,6 +5,7 @@
   import { ptyCreate, ptyWrite, ptyResize, ptyKill, onPtyOutput } from '../lib/tauri/terminal';
   import PanelHeader from './workspace/PanelHeader.svelte';
   import { shortenPath } from '../lib/path';
+  import { Trash2, RotateCw, Terminal as TerminalIcon } from 'lucide-svelte';
   import '@xterm/xterm/css/xterm.css';
 
   let {
@@ -50,58 +51,45 @@
     return Date.now();
   }
 
-  function v(name: string, fallback: string): string {
-    if (typeof document === 'undefined') return fallback;
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-  }
-
-  function orbitTermTheme(): Terminal['options']['theme'] {
-    const bg = v('--bg', '#080808');
-    const fg = v('--t0', '#e0e0e0');
-    const ac = v('--ac', '#00d47e');
-    const t3 = v('--t3', '#444');
-    const t2 = v('--t2', '#666');
-    const t1 = v('--t1', '#888');
-    const sError = v('--s-error', '#e04848');
-    const sInput = v('--s-input', '#e8a030');
-    const sInit = v('--s-init', '#4888e0');
-    const thinkFg = v('--think-fg', '#9980d4');
-
+  function cyberpunkTermTheme(): Terminal['options']['theme'] {
     return {
-      background: bg,
-      foreground: fg,
-      cursor: ac,
-      cursorAccent: bg,
-      selectionBackground: `${ac}33`,
-      selectionForeground: fg,
-      black: t3,
-      red: sError,
-      green: ac,
-      yellow: sInput,
-      blue: sInit,
-      magenta: thinkFg,
-      cyan: sInit,
-      white: t1,
-      brightBlack: t2,
-      brightRed: sError,
-      brightGreen: ac,
-      brightYellow: sInput,
-      brightBlue: sInit,
-      brightMagenta: thinkFg,
-      brightCyan: sInit,
-      brightWhite: fg,
+      background: '#060709',
+      foreground: '#e2fbe8',
+      cursor: '#00ff88',
+      cursorAccent: '#060709',
+      selectionBackground: 'rgba(0, 255, 136, 0.26)',
+      selectionForeground: '#ffffff',
+      black: '#121517',
+      red: '#ff5555',
+      green: '#00ff88',
+      yellow: '#f1fa8c',
+      blue: '#57c7ff',
+      magenta: '#ff79c6',
+      cyan: '#00e5ff',
+      white: '#e2fbe8',
+      brightBlack: '#434d52',
+      brightRed: '#ff6e6e',
+      brightGreen: '#50fa7b',
+      brightYellow: '#ffffa5',
+      brightBlue: '#8be9fd',
+      brightMagenta: '#ff92d0',
+      brightCyan: '#8be9fd',
+      brightWhite: '#ffffff',
     };
   }
 
   async function spawnPty(term: Terminal, fit: FitAddon): Promise<void> {
-    const isWindows = navigator.platform.startsWith('Win');
-    const shell = isWindows ? 'powershell.exe' : '/bin/bash';
+    const isWindows = typeof navigator !== 'undefined' && navigator.platform.startsWith('Win');
+    const isMac = typeof navigator !== 'undefined' && (navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Mac'));
+    const shell = isWindows ? 'powershell.exe' : (isMac ? '/bin/zsh' : '/bin/bash');
+    const args = isWindows ? [] : ['-l'];
+    
     // Get current terminal dimensions before spawning
     fit.fit();
     const rows = term.rows || 24;
     const cols = term.cols || 80;
 
-    await ptyCreate(numericId, shell, [], cwd, [], rows, cols);
+    await ptyCreate(numericId, shell, args, cwd, [], rows, cols);
   }
 
   async function initTerminal(): Promise<void> {
@@ -112,10 +100,15 @@
 
     const term = new Terminal({
       cursorBlink: true,
+      cursorStyle: 'block',
       fontSize: 13,
-      fontFamily: 'Consolas, "Courier New", monospace',
+      lineHeight: 1.25,
+      fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, monospace",
       scrollback: 5000,
-      theme: orbitTermTheme(),
+      theme: cyberpunkTermTheme(),
+      allowTransparency: true,
+      fontWeight: '400',
+      fontWeightBold: '700',
     });
 
     const fit = new FitAddon();
@@ -123,11 +116,7 @@
 
     term.open(container);
 
-    // Delay fit to ensure container has dimensions
-    requestAnimationFrame(() => fit.fit());
-
     // Hide native scrollbar (Windows WebView2 ignores ::-webkit-scrollbar)
-    // Make viewport wider than container, container clips the overflow
     const vp = container.querySelector('.xterm-viewport') as HTMLElement | null;
     if (vp) {
       vp.style.setProperty('right', '-23px', 'important');
@@ -139,21 +128,7 @@
 
     numericId = resolveNumericId();
 
-    // Auto-spawn a shell when no external sessionId drives the PTY
-    if (sessionId <= 0) {
-      try {
-        await spawnPty(term, fit);
-        ownedPty = true;
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
-        loading = false;
-        term.dispose();
-        return;
-      }
-    }
-
-    loading = false;
-
+    // 1. Hook up data and resize handlers
     term.onData(async (data) => {
       try {
         await ptyWrite(numericId, data);
@@ -170,24 +145,60 @@
       }
     });
 
+    // 2. Hook up output listener BEFORE spawning to ensure initial output is never lost
     unlisten = await onPtyOutput(({ sessionId: sid, data, eof }) => {
       if (sid !== numericId) return;
       if (eof) {
-        term?.writeln('\r\n[process exited]');
+        term?.writeln('\r\n\x1b[38;2;0;255;136m[process exited]\x1b[0m');
         return;
       }
       term?.write(data);
     });
 
+    // 3. Auto-spawn a shell when no external sessionId drives the PTY
+    if (sessionId <= 0) {
+      try {
+        await spawnPty(term, fit);
+        ownedPty = true;
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+        loading = false;
+        term.dispose();
+        return;
+      }
+    }
+
+    loading = false;
     terminal = term;
     fitAddon = fit;
+
+    // Initial fit & focus
+    requestAnimationFrame(() => {
+      fit.fit();
+      term.focus();
+    });
 
     let resizeTimer: ReturnType<typeof setTimeout>;
     resizeObserver = new ResizeObserver(() => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => fit?.fit(), 50);
+      resizeTimer = setTimeout(() => {
+        fit?.fit();
+      }, 40);
     });
     resizeObserver.observe(container);
+  }
+
+  function clearTerminal() {
+    terminal?.clear();
+  }
+
+  function restartTerminal() {
+    terminal?.dispose();
+    terminal = undefined;
+    if (ownedPty) {
+      ptyKill(numericId).catch(() => {});
+    }
+    initTerminal();
   }
 
   onMount(async () => {
@@ -205,29 +216,41 @@
 </script>
 
 <section class="terminal-shell">
-  <PanelHeader
-    title="Terminal"
-    path={cwd ? shortenPath(cwd) : null}
-    pathFull={cwd}
-    {onClose}
-    {focused}
-  />
+  <div class="terminal-header-bar">
+    <PanelHeader
+      title="Terminal"
+      path={cwd ? shortenPath(cwd) : null}
+      pathFull={cwd}
+      {onClose}
+      {focused}
+    />
+    <div class="terminal-quick-tools">
+      <span class="cyber-badge">
+        <span class="pulse-dot"></span>
+        <span>ZSH</span>
+      </span>
+      <button class="tool-btn" onclick={clearTerminal} title="Clear Terminal (Cmd+K)" type="button">
+        <Trash2 size={11} />
+        <span>Clear</span>
+      </button>
+      <button class="tool-btn" onclick={restartTerminal} title="Restart Shell" type="button">
+        <RotateCw size={11} />
+      </button>
+    </div>
+  </div>
 
   <div class="terminal-body">
     {#if loading}
       <div class="terminal-overlay">
-        <span class="terminal-status">Starting shell...</span>
+        <div class="cyber-spinner"></div>
+        <span class="terminal-status">INITIALIZING SHELL...</span>
       </div>
     {:else if error}
       <div class="terminal-overlay">
         <span class="terminal-status error">{error}</span>
         <button
           class="retry-btn"
-          onclick={() => {
-            terminal?.dispose();
-            terminal = undefined;
-            initTerminal();
-          }}>Retry</button
+          onclick={restartTerminal}>Retry</button
         >
       </div>
     {/if}
@@ -242,44 +265,127 @@
     flex-direction: column;
     flex: 1;
     width: 100%;
+    height: 100%;
     min-width: 0;
     min-height: 0;
-    background: var(--bg);
-    color: var(--t0);
+    background: #060709;
+    color: #e2fbe8;
     margin: 0;
     border: none;
     outline: none;
     overflow: hidden;
+    position: relative;
+  }
+
+  .terminal-header-bar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: #060709;
+    border-bottom: 1px solid rgba(0, 255, 136, 0.12);
+  }
+
+  .terminal-header-bar :global(header) {
+    flex: 1;
+    background: transparent !important;
+    border: none !important;
+  }
+
+  .terminal-quick-tools {
+    position: absolute;
+    right: 36px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    z-index: 5;
+  }
+
+  .cyber-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(0, 255, 136, 0.08);
+    border: 1px solid rgba(0, 255, 136, 0.25);
+    color: #00ff88;
+    font-size: 9px;
+    font-family: var(--mono);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+
+  .pulse-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #00ff88;
+    box-shadow: 0 0 6px #00ff88;
+    animation: cyberPulse 1.8s infinite ease-in-out;
+  }
+
+  @keyframes cyberPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.8); }
+  }
+
+  .tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--t2);
+    font-size: 10px;
+    font-family: var(--mono);
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .tool-btn:hover {
+    background: rgba(0, 255, 136, 0.12);
+    border-color: rgba(0, 255, 136, 0.3);
+    color: #00ff88;
   }
 
   .terminal-body {
     flex: 1;
     min-height: 0;
-    padding: 14px 16px;
-    background: var(--bg);
+    padding: 10px 14px;
+    background: #060709;
     display: flex;
     width: 100%;
+    height: 100%;
     overflow: hidden;
     margin: 0;
-    border: none;
-    outline: none;
+    position: relative;
+    box-shadow: inset 0 1px 0 0 rgba(0, 255, 136, 0.12), inset 0 0 30px -10px rgba(0, 255, 136, 0.03);
   }
 
   .terminal-shell :global(.xterm) {
-    font-family: var(--mono);
+    font-family: 'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, monospace !important;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .terminal-shell :global(.xterm-screen) {
+    padding: 2px 0;
   }
 
   .terminal-panel {
     flex: 1;
     width: 100%;
+    height: 100%;
     min-width: 0;
     min-height: 0;
-    background: var(--bg);
+    background: transparent;
     margin: 0;
     border: none;
     outline: none;
     overflow: hidden;
-    padding: 6px;
   }
 
   .terminal-overlay {
@@ -287,49 +393,50 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: var(--sp-4);
+    gap: 12px;
     flex: 1;
-    padding: var(--sp-8);
-    margin: 0;
-    border: none;
-    outline: none;
+    padding: 24px;
   }
 
   .terminal-status {
-    font-family: Consolas, 'Courier New', monospace;
-    font-size: 13px;
-    opacity: 0.7;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #00ff88;
+    letter-spacing: 0.08em;
+    opacity: 0.9;
   }
 
   .terminal-status.error {
-    color: var(--s-error);
+    color: #ff5555;
     opacity: 1;
+  }
+
+  .cyber-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(0, 255, 136, 0.15);
+    border-top-color: #00ff88;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
   .retry-btn {
     padding: 4px 14px;
-    background: var(--bg3);
-    border: 1px solid var(--bd1);
+    background: rgba(255, 85, 85, 0.15);
+    border: 1px solid rgba(255, 85, 85, 0.35);
     border-radius: 4px;
-    color: var(--t0);
-    font-size: var(--base);
+    color: #ff8888;
+    font-size: 11px;
+    font-family: var(--mono);
     cursor: pointer;
-    transition:
-      background 0.15s,
-      border-color 0.15s;
+    transition: all 0.15s;
   }
 
   .retry-btn:hover {
-    background: var(--bg4);
-    border-color: color-mix(in srgb, var(--ac), transparent 60%);
-  }
-
-  .terminal-shell :global(.terminal-dot) {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--ac);
-    box-shadow: 0 0 12px var(--ac-border);
-    display: inline-block;
+    background: rgba(255, 85, 85, 0.25);
   }
 </style>

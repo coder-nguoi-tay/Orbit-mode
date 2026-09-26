@@ -1,7 +1,6 @@
 <script lang="ts">
   import Self from './SessionListItem.svelte';
   import type { Session } from '../lib/stores/sessions';
-  import { sessions } from '../lib/stores/sessions';
   import { workspace } from '../lib/stores/workspace';
   import { sessionStatusDotColor } from '../lib/status';
   import { modelShortName } from '../lib/status';
@@ -13,6 +12,7 @@
   import { providerAccounts } from '../lib/stores/providerAccounts';
 
   export let session: Session;
+  export let childrenByParent: Map<number, Session[]>;
   export let depth = 0;
   export let pinned = false;
   export let expandedParents: Set<number>;
@@ -20,11 +20,7 @@
   export let onContextMenu: (e: MouseEvent, s: Session) => void;
   export let displayName: (s: Session) => string;
   export let fmtModel: (model: string | null) => string;
-  function getChildren(list: Session[], parentId: number) {
-    return list.filter((s) => s.parentSessionId === parentId);
-  }
-
-  $: children = getChildren($sessions, session.id);
+  $: children = childrenByParent.get(session.id) ?? [];
   $: hasChildren = children.length > 0;
   $: expanded = expandedParents.has(session.id);
   $: branchLabel = session.branchName ?? session.gitBranch ?? null;
@@ -51,7 +47,7 @@
     const ws = get(workspace);
     if (ws.focusedPaneId) assignSession(ws.focusedPaneId, s.id);
     if (s.attention?.requiresAttention) clearAttention(s.id);
-    if (expandIfParent && getChildren($sessions, s.id).length > 0) {
+    if (expandIfParent && childrenByParent.has(s.id)) {
       onToggleExpand(s.id);
     }
     if (s.status === 'needs_account_action') {
@@ -123,6 +119,7 @@
       session={child}
       depth={depth + 1}
       {pinned}
+      {childrenByParent}
       {expandedParents}
       {onToggleExpand}
       {onContextMenu}

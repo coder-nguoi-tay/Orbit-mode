@@ -14,12 +14,12 @@
 <style>
   .toast-container {
     position: fixed;
-    top: 16px;
+    top: 14px;
     right: 16px;
     z-index: 9999;
     display: flex;
     flex-direction: column;
-    gap: var(--sp-4);
+    gap: 6px;
     pointer-events: none;
     align-items: flex-end;
   }

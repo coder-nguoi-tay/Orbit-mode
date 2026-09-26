@@ -2,6 +2,10 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import * as monaco from 'monaco-editor';
   import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+  import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+  import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+  import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+  import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 
   export let original: string;
   export let modified: string;
@@ -22,6 +26,11 @@
   let _autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let _initFrame: ReturnType<typeof requestAnimationFrame> | null = null;
 
+  /** Configure Monaco workers for the language services used by the diff viewer.
+   * @return No value; installs the worker resolver on the current window.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-26
+   */
   function ensureMonacoWorkers() {
     const globalScope = self as unknown as {
       MonacoEnvironment?: {
@@ -29,8 +38,15 @@
       };
     };
 
-    globalScope.MonacoEnvironment ??= {
-      getWorker: () => new EditorWorker(),
+    globalScope.MonacoEnvironment = {
+      getWorker: (_moduleId: string, label: string) => {
+        if (label === 'typescript' || label === 'javascript') return new TsWorker();
+        if (label === 'json') return new JsonWorker();
+        if (label === 'html' || label === 'handlebars' || label === 'razor')
+          return new HtmlWorker();
+        if (label === 'css' || label === 'scss' || label === 'less') return new CssWorker();
+        return new EditorWorker();
+      },
     };
   }
 

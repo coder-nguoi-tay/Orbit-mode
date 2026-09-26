@@ -4,7 +4,7 @@
 
 # Orbit-mode
 
-**Desktop workspace for running and monitoring multiple AI coding agents.**
+**Desktop workspace for running and monitoring multiple AI coding agents in parallel.**
 
 Supports [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), and [OpenCode](https://github.com/opencode-ai/opencode).
 
@@ -18,100 +18,131 @@ Supports [Claude Code](https://github.com/anthropics/claude-code), [Codex](https
 
 ![Orbit-mode demo](media/demo.gif)
 
-![Orbit-mode UI preview](media/screenshot.png)
+## Overview
 
-## Tổng quan
+Orbit-mode is a Tauri 2 desktop application for running multiple AI coding agents in parallel across separate workspaces. Sessions, output, token usage, and quota snapshots are persisted in SQLite so you can review them after restarting.
 
-Orbit-mode là ứng dụng desktop Tauri 2 để chạy nhiều AI coding agent song song trong các workspace riêng biệt. Session, output, token usage và quota được lưu vào SQLite để có thể theo dõi lại sau khi khởi động lại.
+The application display name is `Orbit-mode`. Some internal packages and identifiers retain `orbit` to preserve compatibility with existing data, sidecars, and the updater.
 
-Tên hiển thị của ứng dụng là `Orbit-mode`. Một số package và identifier nội bộ vẫn giữ `orbit` để bảo toàn khả năng tương thích với dữ liệu, sidecar và updater hiện có.
+## Features
 
-## Tính năng chính
+- Run Claude Code, Codex, and OpenCode sessions in parallel.
+- Split panes and workspace tabs to monitor multiple sessions simultaneously.
+- Streaming feed with thinking blocks, tool calls, markdown rendering, file diffs, and session status.
+- Run sessions locally or over SSH, with support for independent Git worktrees.
+- Create and monitor sub-agents through the built-in MCP orchestrator.
+- Manage model, effort level, slash commands, and file references with `@`.
+- Persistent session history and output stored in SQLite.
+- Desktop notifications, attention badge, and session actions: rename, mute, stop, delete.
+- Context window, token, estimated cost, and rate-limit tracking.
+- **Built-in file editor** — open, browse, and edit any project file directly inside the app.
+- **Live quota tracking** — real-time Claude Code and Codex quota from the CLI, not stale data.
+- **Multi-account profiles** — manage multiple Codex accounts with per-account quota and automatic handoff.
 
-- Chạy song song Claude Code, Codex và OpenCode.
-- Split panes và workspace tabs để theo dõi nhiều session cùng lúc.
-- Streaming feed với thinking blocks, tool calls, markdown, diff và trạng thái session.
-- Chạy session local hoặc qua SSH, hỗ trợ Git worktree độc lập.
-- Tạo và theo dõi sub-agent thông qua MCP orchestrator tích hợp sẵn.
-- Quản lý model, effort, slash command và file reference bằng `@`.
-- Lưu lịch sử session và output bền vững trong SQLite.
-- Desktop notifications, attention badge, rename/mute/stop/delete session.
-- Theo dõi context window, token, chi phí ước tính và rate limit.
+---
+
+## File Editor
+
+Open and edit project files without leaving the app.
+
+![File editor](media/file-editor.gif)
+
+- **Directory tree** — files are organized by folder; click any folder to expand or collapse it.
+- **Fuzzy search** — type partial characters to find files instantly across the whole project.
+- **Monaco editor** — the same editor engine as VS Code, with syntax highlighting for 30+ languages.
+- **Cmd/Ctrl+S** to save; unsaved changes are indicated by a dot badge on the tab and in the file list.
+- **Content cache** — files you have already opened switch instantly without a disk round-trip.
+- Large binary files are shown as read-only; truly binary formats display a clear warning.
+
+To open the file editor: click the **+** button in the tab bar of any pane → **File editor**.
+
+---
 
 ## Agent Usage Control Center
 
-Usage Center là màn hình tổng hợp usage của các agent:
+A unified view of token consumption and quota across all agents and providers.
 
-- Chart token usage theo thời gian với các khoảng `1h`, `6h`, `24h`, `7d` và `30d`.
-- Tổng token, input/output/cache token và chi phí ước tính.
-- Bảng phân tích theo agent, project và model.
-- Quota riêng theo từng Codex account, không gộp nhầm các profile.
-- Theo dõi `5-Hour Usage` và `7-Day Usage` cho Codex.
-- Theo dõi quota của Claude Code khi dữ liệu CLI khả dụng.
-- Nút Refresh để đọc lại dữ liệu mới nhất từ CLI hiện tại và cập nhật snapshot.
-- Hiển thị nguồn dữ liệu và thời gian reset quota.
+![Usage Center](media/usage-center.gif)
+
+- Token usage chart over `1h`, `6h`, `24h`, `7d`, and `30d` windows.
+- Total, input, output, and cache token counts with estimated cost.
+- Breakdown by agent, project, and model.
+- Per-account Codex quota — profiles are never merged together.
+- `5-Hour Usage` and `7-Day Usage` tracking for Codex.
+- Claude Code quota sourced from real rate-limit events captured during active sessions.
+- **Refresh** button reads fresh quota data from `codex app-server` and updates the snapshot.
+- Data source label and quota reset time shown for every entry.
+
+---
 
 ## Settings
 
 ### Mobile access
 
-Bật web access để mở dashboard trên điện thoại hoặc máy tính bảng. Sau khi đổi host, port hoặc trạng thái bật/tắt, bấm Save và restart app để server dùng cấu hình mới.
+Enable web access to open the dashboard on a phone or tablet. After changing the host, port, or toggle, click **Save** and restart the app for the server to use the new configuration.
 
 ### Server & keys
 
-Quản lý host, port và API key:
+Manage host, port, and API keys:
 
-- `127.0.0.1`: chỉ truy cập được trên máy đang chạy app.
-- `0.0.0.0`: cho phép thiết bị khác trong cùng mạng truy cập.
-- IP Tailscale/VPN: dùng khi điện thoại và máy tính ở khác mạng.
-- API key chỉ hiển thị secret đầy đủ một lần khi tạo.
-- Revoke key sẽ vô hiệu hóa ngay token đó.
+- `127.0.0.1` — accessible only on the machine running the app.
+- `0.0.0.0` — accessible from other devices on the same network.
+- Tailscale/VPN IP — use when the phone and computer are on different networks.
+- API key secrets are shown only once at creation time.
+- Revoking a key invalidates it immediately.
 
-Để truy cập từ điện thoại trong cùng Wi-Fi:
+To access from a phone on the same Wi-Fi:
 
-1. Đặt host là `0.0.0.0`, port mặc định là `9999`.
-2. Bật web access, Save và restart app.
-3. Tạo API key.
-4. Sang Mobile access, tạo phone link và quét QR.
+1. Set the host to `0.0.0.0`, default port `9999`.
+2. Enable web access, click **Save**, and restart the app.
+3. Create an API key.
+4. Go to **Mobile access**, create a phone link, and scan the QR code.
 
-Để truy cập khi điện thoại không cùng Wi-Fi, dùng Tailscale hoặc VPN công ty. Với Tailscale, mở URL dạng:
+For access when the phone is on a different network, use Tailscale or a corporate VPN. With Tailscale, open:
 
 ```text
 http://100.x.x.x:9999/?token=YOUR_API_KEY
 ```
 
-Không nên port-forward trực tiếp port `9999` ra Internet.
+Do not forward port `9999` directly to the Internet.
 
 ### Accounts
 
-Quản lý Codex profile:
+Manage Codex profiles:
 
-- Tạo profile ChatGPT login hoặc API key.
-- Kiểm tra trạng thái đăng nhập.
-- Chọn account mặc định hoặc account theo project.
-- Bật automatic quota handoff khi account hiện tại đạt giới hạn.
-- Theo dõi quota theo từng account.
+- Create profiles with ChatGPT login or an API key.
+- Check authentication status.
+- Set a default account or a per-project account.
+- Enable automatic quota handoff when the current account hits its limit.
+- Track quota per account.
 
-Credential actions được hỗ trợ đầy đủ trong desktop app. Web dashboard vẫn có thể xem usage và điều khiển session được hỗ trợ.
+Full credential actions are available in the desktop app. The web dashboard supports viewing usage and controlling sessions.
 
 ### Danger zone
 
-`Reset all sessions` sẽ dừng session đang chạy và xoá session, output, session usage snapshot và account history. Project, API key, HTTP settings và provider quota snapshot không bị xoá.
+**Reset all sessions** stops running sessions and removes sessions, output, session usage snapshots, and account history. Projects, API keys, HTTP settings, and provider quota snapshots are not affected.
 
-## MCP orchestrator
+---
 
-Orbit-mode có MCP server tích hợp để agent có thể tạo và điều khiển agent khác:
+## MCP Orchestrator
 
-| Tool | Mục đích |
+Orbit-mode includes a built-in MCP server so agents can create and control other agents.
+
+| Tool | Purpose |
 | --- | --- |
-| `orbit_create_agent` | Tạo agent/session mới |
-| `orbit_send_message` | Gửi message tiếp theo |
-| `orbit_get_status` | Đọc trạng thái và output |
-| `orbit_cancel_agent` | Dừng agent |
+| `orbit_create_agent` | Create a new agent/session |
+| `orbit_send_message` | Send a follow-up message |
+| `orbit_get_status` | Read status and output |
+| `orbit_cancel_agent` | Stop an agent |
+| `orbit_list_providers` | List available providers and their capabilities |
+| `orbit_list_sessions` | List all sessions with live state |
+| `orbit_get_subagents` | Get the sub-agent tree for a session |
 
-MCP được cấu hình tự động khi session bắt đầu. Với SSH session, app tự truyền thông tin kết nối HTTP cho sidecar để agent remote kết nối ngược về desktop.
+MCP is configured automatically when a session starts. For SSH sessions, the app passes the HTTP connection details to the sidecar so remote agents can connect back to the desktop.
 
-## Kiến trúc
+---
+
+## Architecture
 
 ```text
 SvelteKit + Svelte 5 UI
@@ -126,21 +157,23 @@ Rust Tauri backend
         └── MCP transport: agent orchestration
 ```
 
-Stack chính:
+Stack:
 
-- Tauri 2 và Rust.
-- SvelteKit 2, Svelte 5 và TypeScript.
-- SQLite thông qua `rusqlite`.
-- Axum cho HTTP API và WebSocket.
-- Vitest, Testing Library và Rust unit tests.
+- Tauri 2 and Rust
+- SvelteKit 2, Svelte 5, and TypeScript
+- SQLite via `rusqlite`
+- Axum for the HTTP API and WebSocket
+- Vitest, Testing Library, and Rust unit tests
 
-## Yêu cầu
+---
 
-- Node.js 20 trở lên.
-- npm 10 trở lên.
-- Rust stable; toolchain mới hơn MSRV 1.85 được khuyến nghị.
-- Tauri system dependencies theo hệ điều hành.
-- Ít nhất một CLI provider:
+## Requirements
+
+- Node.js 20 or later
+- npm 10 or later
+- Rust stable; a toolchain newer than MSRV 1.85 is recommended
+- Tauri system dependencies for your OS
+- At least one CLI provider:
 
 ```bash
 # Claude Code
@@ -154,14 +187,16 @@ npm install -g @openai/codex
 go install github.com/opencode-ai/opencode@latest
 ```
 
-OpenCode cũng đọc provider tuỳ chỉnh từ:
+OpenCode also reads custom providers from:
 
 ```text
 ~/.config/opencode/opencode.json
 ~/.config/opencode/opencode.jsonc
 ```
 
-## Chạy từ source
+---
+
+## Running from source
 
 ```bash
 git clone https://github.com/coder-nguoi-tay/Orbit-mode.git
@@ -170,77 +205,86 @@ npm install
 npm run tauri:dev
 ```
 
-Các lệnh phát triển thường dùng:
+Common development commands:
 
-| Lệnh | Mục đích |
+| Command | Purpose |
 | --- | --- |
-| `npm run tauri:dev` | Chạy UI và Rust backend cùng lúc |
-| `npm run dev:mock` | Chạy frontend với mock Tauri IPC |
-| `npm run build` | Build frontend production |
-| `npm run tauri:build` | Build installer/bundle Tauri |
-| `npm run clean` | Xoá artifact build an toàn |
-| `npm run clean:all` | Xoá cả dependency/artifact theo script |
+| `npm run tauri:dev` | Run UI and Rust backend together |
+| `npm run dev:mock` | Run frontend with mock Tauri IPC (no Rust required) |
+| `npm run build` | Build frontend for production |
+| `npm run tauri:build` | Build the Tauri installer/bundle |
+| `npm run clean` | Safely remove build artifacts |
+| `npm run clean:all` | Remove all dependencies and artifacts |
 
-`npm run dev:mock` hữu ích khi không thể mở cửa sổ native Tauri hoặc chỉ cần kiểm tra UI.
+`npm run dev:mock` is useful when you cannot open a native Tauri window or only need to work on the UI.
 
-## Kiểm tra chất lượng
+---
+
+## Quality checks
 
 ```bash
-# Type check Svelte/TypeScript
+# Svelte/TypeScript type check
 npm run check
 
-# Frontend unit và component tests
+# Frontend unit and component tests
 npm test
 
 # Rust tests
 npm run test:rust
 
-# ESLint, svelte-check và Clippy
+# ESLint, svelte-check, and Clippy
 npm run lint
 
-# Prettier và rustfmt check
+# Prettier and rustfmt check
 npm run format:check
 ```
 
-## Dữ liệu và bảo mật
+---
 
-- Database mặc định nằm trong thư mục app data của hệ điều hành.
-- API key được lưu dưới dạng hash; secret chỉ trả về lúc tạo key.
-- Chỉ bật `0.0.0.0` trên mạng tin cậy.
-- Không commit API key, provider credential hoặc database local.
-- Với máy công ty, hãy tuân thủ chính sách VPN, firewall và cài đặt phần mềm của tổ chức.
+## Data & security
+
+- The database is stored in the OS app data directory by default.
+- API keys are stored as hashes; the secret is returned only at creation time.
+- Only enable `0.0.0.0` on a trusted network.
+- Do not commit API keys, provider credentials, or local databases.
+- On a work machine, follow your organization's VPN, firewall, and software installation policies.
+
+---
 
 ## Troubleshooting
 
-### Settings hiển thị `unavailable`
+### Settings show `unavailable`
 
-- Kiểm tra app desktop đã restart sau khi bật web access chưa.
-- Kiểm tra token/API key còn hiệu lực.
-- Nếu dùng điện thoại khác mạng, kiểm tra Tailscale/VPN đang kết nối trên cả hai thiết bị.
-- Kiểm tra firewall có cho phép port đã cấu hình hay không.
+- Confirm the desktop app has been restarted after enabling web access.
+- Verify the token/API key is still valid.
+- If using a phone on a different network, check that Tailscale/VPN is connected on both devices.
+- Check that your firewall allows the configured port.
 
-### Quota chưa có phần trăm
+### Quota has no percentage
 
-- Bấm Refresh trong Agent Usage Control Center.
-- Kiểm tra CLI tương ứng đã cài và đã đăng nhập.
-- Với account profile, kiểm tra account đang ở trạng thái authenticated/available.
-- Dữ liệu CLI không đọc được sẽ được giữ trạng thái chưa khả dụng thay vì tự suy đoán phần trăm.
+- Click **Refresh** in the Agent Usage Control Center.
+- Verify the relevant CLI is installed and authenticated.
+- For account profiles, confirm the account is in an `authenticated` / `available` state.
+- Orbit-mode does not run a background Claude prompt just to read quota, as that would consume real quota.
+- When CLI data cannot be read, the entry stays in an unavailable state rather than guessing.
 
-### App frontend chạy nhưng không có backend
+### Frontend runs but no backend
 
 ```bash
 npm run tauri:dev
 ```
 
-Nếu chỉ cần UI mock:
+For UI-only work with mock data:
 
 ```bash
 npm run dev:mock
 ```
 
-## Đóng góp
+---
 
-Xem [CONTRIBUTING.md](CONTRIBUTING.md) để biết quy ước phát triển và kiểm tra trước khi gửi thay đổi.
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions and checks to run before submitting changes.
 
 ## License
 

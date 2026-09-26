@@ -321,7 +321,6 @@ pub fn run() {
             commands::stats::get_usage_overview,
             commands::stats::get_provider_quotas,
             commands::stats::refresh_codex_quotas,
-            commands::stats::refresh_claude_quotas,
             commands::stats::get_session_usages,
             commands::accounts::get_provider_accounts,
             commands::accounts::create_codex_account,

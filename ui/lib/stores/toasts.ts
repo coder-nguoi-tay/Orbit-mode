@@ -17,12 +17,18 @@ export interface Toast {
 
 export const toasts = writable<Toast[]>([]);
 
-export function addToast(toast: Omit<Toast, 'id'>): string {
+export function addToast(toast: Omit<Toast, 'id'>, duration?: number): string {
   const id = Math.random().toString(36).slice(2);
-  toasts.update((list) => [...list, { ...toast, id }]);
+
+  toasts.update((list) => {
+    // If identical message exists, replace it to avoid clutter
+    const filtered = list.filter((t) => t.message !== toast.message);
+    return [...filtered, { ...toast, id }];
+  });
 
   if (toast.autoDismiss) {
-    setTimeout(() => removeToast(id), 5000);
+    const timeout = duration ?? (toast.type === 'success' ? 2200 : 4500);
+    setTimeout(() => removeToast(id), timeout);
   }
 
   return id;

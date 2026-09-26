@@ -75,6 +75,12 @@ describe('account quota updates', () => {
 const settleLiveRead = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('refreshUsageOverview live Codex read', () => {
+  it('does not launch a Claude CLI probe during usage refresh', async () => {
+    await refreshUsageOverview();
+    await settleLiveRead();
+    expect(mockRefreshClaudeQuotas).not.toHaveBeenCalled();
+  });
+
   it('never waits for the CLI read, so a hung codex cannot stall the UI', async () => {
     mockGetUsageOverview.mockResolvedValue({ quotas: [quota()] });
     // A read that never settles — refreshUsageOverview must still resolve.

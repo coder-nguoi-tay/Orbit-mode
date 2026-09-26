@@ -65,16 +65,55 @@ pub fn read_file_content(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+/// Lists every project file that the Explorer can display.
+///
+/// Dependency and build-cache directories are skipped intentionally, while
+/// project files are scanned without an arbitrary file-count or depth cap so
+/// large projects do not hide later root entries.
+///
+/// @param cwd Absolute path of the project root to scan.
+/// @return Relative, slash-normalized file paths sorted for stable display.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-26
 pub fn list_project_files(cwd: String) -> Vec<String> {
     use ignore::WalkBuilder;
 
+    // Directories we never descend into — only well-known dependency/cache dirs
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        "node_modules",
+        "vendor",
+        "target",
+        "__pycache__",
+        ".cache",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".turbo",
+        ".yarn",
+        ".tox",
+        ".venv",
+        ".mypy_cache",
+        ".pytest_cache",
+        "elm-stuff",
+        ".dart_tool",
+        ".pub-cache",
+    ];
+
     let mut files = Vec::new();
     let walker = WalkBuilder::new(&cwd)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .max_depth(Some(12))
+        .hidden(false) // show dotfiles: .env, .dockerignore, etc.
+        .git_ignore(false) // don't rely on .gitignore — we block heavy dirs ourselves
+        .git_global(false)
+        .git_exclude(false)
+        .filter_entry(move |e| {
+            if e.file_type().is_some_and(|ft| ft.is_dir()) {
+                let name = e.file_name().to_string_lossy();
+                !SKIP_DIRS.contains(&name.as_ref())
+            } else {
+                true
+            }
+        })
         .build();
 
     for entry in walker.flatten() {
@@ -85,9 +124,6 @@ pub fn list_project_files(cwd: String) -> Vec<String> {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             if !rel_str.is_empty() {
                 files.push(rel_str.to_string());
-                if files.len() >= 5000 {
-                    break;
-                }
             }
         }
     }

@@ -304,4 +304,25 @@ describe('InputBar', () => {
 
     expect(container.querySelector('.quiet-composer.compact')).toBeTruthy();
   });
+
+  it('does not scan project files until @-file completion is opened', async () => {
+    const { listProjectFiles } = await import('$lib/tauri');
+    const { getByTestId } = render(InputBar, {
+      props: {
+        sessionId: 1,
+        cwd: '/large-project',
+        sessionStatus: 'running',
+        provider: 'claude-code',
+        providerModels: [],
+      },
+    });
+
+    expect(listProjectFiles).not.toHaveBeenCalled();
+
+    await fireEvent.input(getByTestId('message-input'), { target: { value: '@' } });
+
+    await waitFor(() => {
+      expect(listProjectFiles).toHaveBeenCalledWith('/large-project');
+    });
+  });
 });

@@ -405,7 +405,7 @@
 
     {#if isWorking}
       <article class="timeline-event working" aria-label="agent working">
-        <div class="timeline-node working"></div>
+        <div class="timeline-node working" aria-hidden="true"></div>
         <div class="timeline-body">
           <div class="event-meta">
             <span class="event-actor working">Orbit-mode / {agentLabel}</span>
@@ -462,6 +462,15 @@
     grid-template-columns: 14px 1fr;
     gap: 8px;
     position: relative;
+    border-radius: 6px;
+    transition: background 0.15s ease;
+  }
+  .timeline-event.user {
+    background: linear-gradient(135deg, rgba(79, 146, 247, 0.08) 0%, rgba(79, 146, 247, 0.02) 100%);
+    border: 1px solid rgba(79, 146, 247, 0.22);
+    border-left: 3px solid var(--user-fg, #4f92f7);
+    padding: 10px 14px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
   .timeline-event:not(:last-child)::before {
     display: none;
@@ -487,9 +496,11 @@
     box-shadow: none;
   }
   .timeline-node.user::after {
-    content: '>';
-    color: var(--t1);
-    font-size: 13px;
+    content: '›';
+    color: var(--user-fg, #4f92f7);
+    font-size: 15px;
+    font-weight: 700;
+    text-shadow: 0 0 8px rgba(79, 146, 247, 0.5);
     background: transparent;
     box-shadow: none;
   }
@@ -524,7 +535,15 @@
     color: var(--t2);
   }
   .event-actor.user {
-    color: var(--t1);
+    color: var(--user-fg, #4f92f7);
+    font-weight: 700;
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: rgba(79, 146, 247, 0.14);
+    border: 1px solid rgba(79, 146, 247, 0.28);
+    border-radius: 4px;
+    padding: 1px 6px;
   }
   .event-actor.assistant,
   .event-actor.working {
@@ -546,14 +565,15 @@
     width: 100%;
     border: none;
     border-radius: 0;
-    padding: 0;
+    padding: 2px 0 0;
     background: transparent;
-    font-family: var(--mono);
-    font-size: 13px;
+    font-family: var(--font-mono, var(--mono), monospace);
+    font-size: 13.5px;
     line-height: 1.55;
-    color: var(--t0);
+    color: var(--t0, #ffffff);
     white-space: pre-wrap;
     word-break: break-word;
+    font-weight: 500;
   }
   .system-text {
     color: var(--t1);
@@ -572,13 +592,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--think-fg);
-    background: var(--think-bg);
-    border: 1px solid color-mix(in srgb, var(--think-fg), transparent 82%);
+    color: var(--think-fg, #a78bfa);
+    background: var(--think-bg, rgba(167, 139, 250, 0.08));
+    border: 1px solid color-mix(in srgb, var(--think-fg, #a78bfa), transparent 82%);
     border-radius: 999px;
-    padding: 7px 10px;
+    padding: 4px 10px;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 10.5px;
     line-height: 1;
   }
 
@@ -590,13 +610,13 @@
     display: inline-flex;
     align-items: flex-end;
     gap: 3px;
-    height: 10px;
+    height: 8px;
     padding-bottom: 1px;
   }
 
   .typing-dots .dot {
-    width: 4px;
-    height: 4px;
+    width: 3.5px;
+    height: 3.5px;
     border-radius: 50%;
     background: currentColor;
     opacity: 0.35;
@@ -616,29 +636,11 @@
     70%,
     100% {
       opacity: 0.35;
-      transform: translateY(0) scale(1);
+      transform: translateY(0);
     }
     35% {
       opacity: 1;
-      transform: translateY(-3px) scale(1.1);
-    }
-  }
-
-  .timeline-node.working::after {
-    animation: workingGlow 2.4s ease-in-out infinite;
-  }
-
-  @keyframes workingGlow {
-    0%,
-    100% {
-      box-shadow:
-        0 0 0 3px color-mix(in srgb, var(--ac), transparent 78%),
-        0 0 12px color-mix(in srgb, var(--ac), transparent 60%);
-    }
-    50% {
-      box-shadow:
-        0 0 0 3px color-mix(in srgb, var(--ac), transparent 70%),
-        0 0 20px color-mix(in srgb, var(--ac), transparent 30%);
+      transform: translateY(-2.5px);
     }
   }
 

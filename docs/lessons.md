@@ -96,3 +96,11 @@ git checkout -b fix/chat-feed --no-track origin/dev
 **Por quê:** O `opencode.json` na raiz do Orbit é usado para MCP/plugins do projeto e não contém necessariamente blocos `provider`. Usá-lo como config de provider gera falsos erros como pedir `provider.crof` em `C:\Users\...\orbit/opencode.json` e marca providers default como não configurados.
 
 **Quando aplicar:** Sempre que mexer em listagem, normalização ou validação de providers/modelos OpenCode.
+
+## File Explorer Projects
+
+**Quy tắc:** Không đặt giới hạn số file hoặc độ sâu tùy ý khi quét cây project để hiển thị; chỉ loại trừ các thư mục dependency/cache đã xác định rõ.
+
+**Vì sao:** Một thư mục lớn như `core` có thể vượt giới hạn trước khi bộ quét tới các thư mục và file ở root như `database`, `docker`, `composer.lock` hoặc `phpunit.xml`, làm Explorer hiển thị thiếu nhưng không báo lỗi.
+
+**Khi áp dụng:** Khi sửa API `list_project_files` hoặc UI Explorer của Orbit.

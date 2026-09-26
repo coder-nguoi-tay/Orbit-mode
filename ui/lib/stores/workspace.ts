@@ -14,7 +14,8 @@ export type SplitNode =
 export type TabTarget =
   | { kind: 'agent'; sessionId: number }
   | { kind: 'terminal'; terminalId: string; cwd: string }
-  | { kind: 'git'; cwd: string };
+  | { kind: 'git'; cwd: string }
+  | { kind: 'files'; cwd: string };
 
 export interface Tab {
   id: string;
@@ -77,8 +78,53 @@ export const workspace = writable<WorkspaceState>(defaultState());
 
 // ── Pane actions ───────────────────────────────────────────────────────
 
-/** Assign a session to a pane. If session is already open in another pane, move it here. */
+/** Assign a session without replacing a focused utility pane.
+ * @param paneId Preferred pane selected by the current workspace focus.
+ * @param sessionId Session to open or focus.
+ * @return No value.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-26
+ */
 export function assignSession(paneId: string, sessionId: number): void {
+  const state = get(workspace);
+  const pane = state.panes[paneId];
+  const activeTab = pane?.tabs.find((tab) => tab.id === pane.activeTabId);
+
+  if (activeTab && activeTab.target.kind !== 'agent') {
+    const chatPaneId = Object.entries(state.panes).find(([candidatePaneId, candidatePane]) => {
+      if (candidatePaneId === paneId) return false;
+      const candidateTab = candidatePane.tabs.find((tab) => tab.id === candidatePane.activeTabId);
+      return candidateTab?.target.kind === 'agent';
+    })?.[0];
+
+    if (chatPaneId) {
+      const chatPane = state.panes[chatPaneId];
+      const currentChatTab = chatPane.tabs.find((tab) => tab.id === chatPane.activeTabId);
+      if (
+        currentChatTab?.target.kind === 'agent' &&
+        currentChatTab.target.sessionId !== sessionId
+      ) {
+        const terminalPaneIds = Object.entries(state.panes)
+          .filter(([candidatePaneId, candidatePane]) => {
+            if (candidatePaneId === chatPaneId) return false;
+            const candidateTab = candidatePane.tabs.find(
+              (tab) => tab.id === candidatePane.activeTabId
+            );
+            return candidateTab?.target.kind === 'terminal';
+          })
+          .map(([candidatePaneId]) => candidatePaneId);
+
+        for (const terminalPaneId of terminalPaneIds) closePane(terminalPaneId);
+      }
+
+      addTab(chatPaneId, { kind: 'agent', sessionId });
+      return;
+    }
+
+    splitPane(paneId, 'horizontal', createTab({ kind: 'agent', sessionId }));
+    return;
+  }
+
   addTab(paneId, { kind: 'agent', sessionId });
 }
 

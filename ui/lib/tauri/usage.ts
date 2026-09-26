@@ -14,11 +14,6 @@ export async function refreshCodexQuotas(): Promise<ProviderQuota[]> {
   return invoke<ProviderQuota[]>('refresh_codex_quotas');
 }
 
-/** Run a minimal Claude Code command to read current rate limits. */
-export async function refreshClaudeQuotas(): Promise<ProviderQuota[]> {
-  return invoke<ProviderQuota[]>('refresh_claude_quotas');
-}
-
 export async function getSessionUsages(
   sessionId?: number,
   limit?: number
