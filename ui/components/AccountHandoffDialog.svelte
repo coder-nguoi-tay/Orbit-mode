@@ -79,12 +79,6 @@
    */
   async function confirmHandoff(): Promise<void> {
     if (!targetAccount || !model) return;
-    if (
-      !window.confirm(
-        `Switch ${session.name || 'this session'} from ${sourceAccount?.label || 'its current account'} to ${targetAccount.label}? A new Codex process will use the same worktree.`
-      )
-    )
-      return;
     starting = true;
     error = '';
     try {
@@ -142,6 +136,11 @@
           </select>
         </label>
       {/if}
+    {/if}
+    {#if targetAccount}
+      <p>
+        Switching to {targetAccount.label} starts a new {session.provider} process on the same worktree.
+      </p>
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#if starting}<p role="status">Starting a new process with the selected profile…</p>{/if}

@@ -110,6 +110,35 @@ let mockProjects = [
   { id: 2, name: 'dashboard', path: 'C:\\Users\\dev\\dashboard' },
 ];
 
+const mockAccounts = [
+  {
+    id: 'codex-system-default',
+    providerId: 'codex',
+    label: 'System Default',
+    authType: 'chat_gpt_authenticated',
+    status: 'available',
+    executionScope: 'local',
+    isDefault: false,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    lastUsedAt: null,
+  },
+  {
+    id: 'mock-account-2',
+    providerId: 'codex',
+    label: 'acc2',
+    authType: 'chat_gpt_authenticated',
+    status: 'available',
+    executionScope: 'local',
+    isDefault: true,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    lastUsedAt: null,
+  },
+];
+
+const mockAutoHandoff: Record<string, boolean> = {};
+
 let mockHttpSettings = {
   enabled: true,
   host: '0.0.0.0',
@@ -583,12 +612,24 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
 
   switch (cmd) {
     case 'get_provider_accounts':
+      return mockAccounts;
     case 'get_session_account_history':
       return [];
     case 'get_provider_account_auto_handoff':
-      return false;
+      return mockAutoHandoff[args?.accountId as string] ?? false;
     case 'set_provider_account_auto_handoff':
+      mockAutoHandoff[args?.accountId as string] = args?.enabled as boolean;
       return null;
+    case 'rename_provider_account': {
+      const account = mockAccounts.find((entry) => entry.id === args?.accountId);
+      if (account) account.label = args?.label as string;
+      return null;
+    }
+    case 'remove_provider_account': {
+      const index = mockAccounts.findIndex((entry) => entry.id === args?.accountId);
+      if (index >= 0) mockAccounts.splice(index, 1);
+      return null;
+    }
     case 'list_sessions':
       return sessions;
 

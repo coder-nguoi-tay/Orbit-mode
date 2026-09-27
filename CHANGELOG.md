@@ -4,6 +4,12 @@
 
 ## September 2026
 
+### 09/27 · Fix — Account buttons work again
+Renaming an account, removing one, and confirming an account switch all did
+nothing and reported an error, because they relied on a pop-up the app can no
+longer open. Each now opens a proper dialog inside Orbit. Removing an account
+asks once instead of twice, with a checkbox for deleting its credentials.
+
 ### 09/27 · Fix — Codex switches accounts when a plan limit is reached
 When Codex stopped because the 5-hour plan limit was reached, the chat used to go
 quiet with no explanation and stayed on the exhausted account. Orbit now recognises

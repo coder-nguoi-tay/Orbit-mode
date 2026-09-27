@@ -22,6 +22,7 @@
   import { usageCenterOpen } from '../lib/stores/usage';
   import { formatTimeRemaining } from '../lib/cost';
   import { IS_WEB } from '../lib/tauri/invoke';
+  import Modal from './shared/Modal.svelte';
 
   let label = '';
   let authType: AccountAuthType = 'chat_gpt_authenticated';
@@ -34,8 +35,19 @@
   let projects: Array<{ id: number; name: string }> = [];
   let projectAccountIds: Record<number, string> = {};
   let automaticHandoffAccounts: Record<string, boolean> = {};
+  let renaming: ProviderAccount | null = null;
+  let renameLabel = '';
+  let removing: ProviderAccount | null = null;
+  let removeCredentials = false;
 
   $: accounts = Object.values($providerAccounts);
+  $: removingActiveCount = removing
+    ? $sessions.filter(
+        (session) =>
+          session.providerAccountId === removing?.id &&
+          ['running', 'waiting', 'initializing'].includes(session.status)
+      ).length
+    : 0;
 
   /** Load the user's account checkbox preferences without reading credentials.
    * @return Completion after all configured profile states are loaded.
@@ -162,9 +174,23 @@
    * @author ductv <ductv@getflycrm.com>
    * @since 2026-09-25
    */
-  async function renameAccount(account: ProviderAccount): Promise<void> {
-    const nextLabel = window.prompt('Account label', account.label)?.trim();
-    if (!nextLabel || nextLabel === account.label) return;
+  /** Focus and select a freshly mounted input, which `autofocus` does not do reliably.
+   * @param node The input mounted inside the dialog.
+   * @return A no-op Svelte action teardown.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function focusOnMount(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+    return { destroy() {} };
+  }
+
+  async function renameAccount(): Promise<void> {
+    const account = renaming;
+    const nextLabel = renameLabel.trim();
+    renaming = null;
+    if (!account || !nextLabel || nextLabel === account.label) return;
     try {
       await renameProviderAccount(account.id, nextLabel);
       await refreshProviderAccounts();
@@ -233,21 +259,11 @@
    * @author ductv <ductv@getflycrm.com>
    * @since 2026-09-25
    */
-  async function removeAccount(account: ProviderAccount): Promise<void> {
-    const activeCount = $sessions.filter(
-      (session) =>
-        session.providerAccountId === account.id &&
-        ['running', 'waiting', 'initializing'].includes(session.status)
-    ).length;
-    if (
-      !window.confirm(
-        `Remove ${account.label} from future selection? ${activeCount} active sessions use it. Sessions and worktrees will stay.`
-      )
-    )
-      return;
-    const deleteCredentials = window.confirm(
-      'Also delete this profile’s Codex credential directory? Cancel keeps it on disk.'
-    );
+  async function removeAccount(): Promise<void> {
+    const account = removing;
+    const deleteCredentials = removeCredentials;
+    removing = null;
+    if (!account) return;
     try {
       await removeProviderAccount(account.id, deleteCredentials);
       await refreshProviderAccounts();
@@ -274,14 +290,13 @@
     </p>
   {:else}
     <p>
-      Add one isolated Codex profile for each ChatGPT account. Orbit-mode stores only the
-      label and status; the official Codex login keeps the credentials in that profile's separate
-      home.
+      Add one isolated Codex profile for each ChatGPT account. Orbit-mode stores only the label and
+      status; the official Codex login keeps the credentials in that profile's separate home.
     </p>
     <p>
       Enable <strong>Automatic quota handoff</strong> on the profiles that may be used after the current
-      profile reaches an official quota limit. Orbit-mode keeps each account's usage separate
-      and uses each selected profile at most once per session.
+      profile reaches an official quota limit. Orbit-mode keeps each account's usage separate and uses
+      each selected profile at most once per session.
     </p>
     <div class="add-row">
       <label>
@@ -400,18 +415,72 @@
             >
           {/if}
           <button on:click={() => checkAccount(account)} disabled={busy}>Check</button>
-          <button on:click={() => renameAccount(account)} disabled={busy}>Rename</button>
+          <button
+            on:click={() => {
+              renaming = account;
+              renameLabel = account.label;
+            }}
+            disabled={busy}>Rename</button
+          >
           {#if !account.isDefault && !['needs_login', 'auth_expired', 'quota_exceeded', 'unavailable'].includes(account.status)}
             <button on:click={() => makeDefault(account)} disabled={busy}>Make default</button>
           {/if}
           {#if account.id !== 'codex-system-default'}
-            <button on:click={() => removeAccount(account)} disabled={busy}>Remove</button>
+            <button
+              on:click={() => {
+                removing = account;
+                removeCredentials = false;
+              }}
+              disabled={busy}>Remove</button
+            >
           {/if}
         </div>
       </article>
     {/each}
   {/if}
 </section>
+
+{#if renaming}
+  <Modal title="Rename account" width="400px" zIndex={200} on:close={() => (renaming = null)}>
+    <div class="dialog">
+      <label>
+        Account label
+        <input
+          bind:value={renameLabel}
+          use:focusOnMount
+          on:keydown={(event) => event.key === 'Enter' && renameAccount()}
+        />
+      </label>
+      <div class="dialog-actions">
+        <button on:click={() => (renaming = null)}>Cancel</button>
+        <button class="primary" on:click={renameAccount} disabled={!renameLabel.trim()}>
+          Rename
+        </button>
+      </div>
+    </div>
+  </Modal>
+{/if}
+
+{#if removing}
+  <Modal title="Remove account" width="440px" zIndex={200} on:close={() => (removing = null)}>
+    <div class="dialog">
+      <p>
+        Remove <strong>{removing.label}</strong> from future selection?
+        {removingActiveCount} active
+        {removingActiveCount === 1 ? 'session uses' : 'sessions use'} it. Existing sessions and worktrees
+        stay.
+      </p>
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={removeCredentials} />
+        Also delete this profile's Codex credential directory from disk
+      </label>
+      <div class="dialog-actions">
+        <button on:click={() => (removing = null)}>Cancel</button>
+        <button class="danger" on:click={removeAccount}>Remove</button>
+      </div>
+    </div>
+  </Modal>
+{/if}
 
 <style>
   .accounts {
@@ -504,5 +573,30 @@
   }
   .login-instructions {
     overflow-wrap: anywhere;
+  }
+  .dialog {
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+  }
+  .dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .checkbox {
+    align-items: center;
+    display: flex;
+    gap: 7px;
+  }
+  .checkbox input {
+    accent-color: var(--accent);
+  }
+  .primary {
+    background: var(--accent);
+  }
+  .danger {
+    border-color: #ef6b6b;
+    color: #ef6b6b;
   }
 </style>
