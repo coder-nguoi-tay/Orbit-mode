@@ -934,10 +934,26 @@ impl SessionManager {
         };
 
         // 4. Set context window from provider
-        if let Some(ctx) = provider.context_window(&model) {
+        {
             let mut m = manager.write().unwrap_or_else(|e| e.into_inner());
             if let Some(state) = m.journal_states.get_mut(&session_id) {
-                state.context_window = Some(ctx);
+                if let Some(ctx) = provider.context_window(&model) {
+                    state.context_window = Some(ctx);
+                }
+                // Quota windows describe the account this process runs under. After an
+                // account handoff the session keeps its journal state, so stale windows
+                // would be re-recorded against the new account and exhaust it on sight.
+                state.rate_limit.clear();
+                if matches!(
+                    state.attention.reason,
+                    Some(crate::models::AttentionReason::RateLimit)
+                ) {
+                    state.attention = crate::models::AttentionState {
+                        requires_attention: false,
+                        reason: None,
+                        since: None,
+                    };
+                }
             }
         }
 

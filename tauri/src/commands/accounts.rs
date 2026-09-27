@@ -338,12 +338,47 @@ pub fn check_provider_account(
             account.status,
             AccountStatus::QuotaExceeded | AccountStatus::NearLimit
         ) {
-        account.status
+        // The stored quota state is only a cached reading. Ask the CLI what the plan
+        // windows actually are, so a window that has reset — or a reading that was
+        // wrong — does not keep the account out of the rotation for good.
+        live_quota_status(&account).unwrap_or(account.status)
     } else {
         authentication_status
     };
     database.update_provider_account_status(&account_id, account.status.clone())?;
     Ok(account)
+}
+
+/// Re-read one account's plan windows and derive its availability from them.
+///
+/// @param account The Codex profile to read.
+/// @return The status implied by the live windows, or None when the read fails.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-28
+fn live_quota_status(account: &ProviderAccount) -> Option<AccountStatus> {
+    if account.auth_type == crate::models::AccountAuthType::ApiKey {
+        return None;
+    }
+    let executable = crate::services::spawn_manager::find_codex()?;
+    let quota = crate::services::codex_quota::fetch_codex_quota(
+        &executable,
+        account.profile_home.as_deref(),
+        &account.id,
+        Some(&account.id),
+    )
+    .ok()?;
+    let peak = [quota.five_hour.as_ref(), quota.seven_day.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|window| window.utilization)
+        .fold(0.0_f64, f64::max);
+    Some(if peak >= 1.0 {
+        AccountStatus::QuotaExceeded
+    } else if peak >= 0.9 {
+        AccountStatus::NearLimit
+    } else {
+        AccountStatus::Available
+    })
 }
 
 /// Stream temporary Codex device-login instructions, including the standalone one-time code,

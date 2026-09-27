@@ -1224,10 +1224,20 @@ impl DatabaseService {
     pub fn get_latest_provider_quotas(&self) -> SqlResult<Vec<crate::models::ProviderQuota>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
+            // An exhausted sample that names no reset time cannot be trusted forever —
+            // it would keep the account marked spent for good. Give it the length of a
+            // five-hour window and let it lapse.
             "SELECT provider, account_key, provider_account_id, window_type, utilization, reset_at, status, source, created_at
              FROM provider_quota_snapshots
              WHERE source != 'cli_probe'
-               AND (reset_at IS NULL OR reset_at > unixepoch())
+               AND (
+                 reset_at > unixepoch()
+                 OR (reset_at IS NULL AND (
+                      status IS NULL
+                      OR status NOT IN ('exceeded', 'blocked')
+                      OR unixepoch(created_at) > unixepoch() - 18000
+                 ))
+               )
              ORDER BY id DESC",
         )?;
         let mut map: std::collections::HashMap<(String, String), crate::models::ProviderQuota> =

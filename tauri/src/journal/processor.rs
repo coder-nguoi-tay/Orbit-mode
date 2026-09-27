@@ -1137,21 +1137,36 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
 
 /// Recognize the plan-limit wording Codex uses when it refuses to run a turn.
 ///
+/// Only plan exhaustion counts. A bare "rate limit" or "429" is the per-minute
+/// throttle, which retries on its own — treating it as plan exhaustion would hand
+/// the session to another account and mark a healthy one as spent.
+///
 /// @param message The error text from a Codex failure event.
-/// @return True when the text names a usage, rate or quota limit.
+/// @return True when the text names an exhausted plan window.
 /// @author ductv <ductv@getflycrm.com>
 /// @since 2026-09-27
 fn is_codex_quota_message(message: &str) -> bool {
     let lowered = message.to_lowercase();
-    ["usage limit", "rate limit", "rate_limit", "quota"]
-        .iter()
-        .any(|marker| lowered.contains(marker))
+    [
+        "usage limit",
+        "usage cap",
+        "plan limit",
+        "weekly limit",
+        "monthly limit",
+        "quota exceeded",
+        "exceeded your current quota",
+        "out of credits",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
 }
 
 /// Mark the five-hour plan window exhausted so the automatic handoff path fires.
 ///
 /// Any reset time learned from an earlier `token_count` event is preserved, so the
-/// UI can still count down instead of showing an idle session.
+/// UI can still count down instead of showing an idle session. Without one the window
+/// is given the full five hours: a sample that never expires would keep the account
+/// marked spent forever if this reading is ever wrong.
 ///
 /// @param state The journal state whose quota windows are updated.
 /// @author ductv <ductv@getflycrm.com>
@@ -1164,12 +1179,15 @@ fn mark_codex_plan_quota_exceeded(state: &mut JournalState) {
     {
         existing.status = "exceeded".into();
         existing.utilization = existing.utilization.max(1.0);
+        existing.resets_at = existing
+            .resets_at
+            .or_else(|| Some((chrono::Utc::now() + chrono::Duration::hours(5)).timestamp()));
     } else {
         state.rate_limit.push(crate::models::RateLimitInfo {
             status: "exceeded".into(),
             rate_limit_type: "five_hour".into(),
             utilization: 1.0,
-            resets_at: None,
+            resets_at: Some((chrono::Utc::now() + chrono::Duration::hours(5)).timestamp()),
             is_using_overage: false,
             surpassed_threshold: 0.0,
         });
@@ -1998,5 +2016,55 @@ mod helper_tests {
             "non-quota failure must not pause the session"
         );
         assert!(!state.attention.requires_attention);
+    }
+
+    /// A transient 429 is not plan exhaustion. Treating it as such hands the session to
+    /// another account and marks a healthy one spent, which is how a working account was
+    /// taken out of the rotation.
+    #[test]
+    fn codex_transient_rate_limit_does_not_mark_plan_exhausted() {
+        for message in [
+            "429 Too Many Requests",
+            "rate limit reached, retrying in 2s",
+            "stream error: rate_limit_error",
+        ] {
+            let mut state = JournalState::default();
+            let line = serde_json::json!({ "type": "error", "message": message });
+
+            process_line_codex(&mut state, &line.to_string());
+
+            assert!(
+                state.rate_limit.is_empty(),
+                "{message:?} must not exhaust the plan window"
+            );
+            assert!(
+                !state.attention.requires_attention,
+                "{message:?} must not pause the session"
+            );
+        }
+    }
+
+    /// A window with no reset time never expires downstream, so a wrong reading would
+    /// keep the account marked spent forever.
+    #[test]
+    fn codex_error_derived_window_always_carries_a_reset_time() {
+        let mut state = JournalState::default();
+        let line = serde_json::json!({
+            "type": "error",
+            "message": "You've hit your usage limit."
+        });
+
+        process_line_codex(&mut state, &line.to_string());
+
+        let five_hour = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "five_hour")
+            .expect("missing five-hour quota");
+        let resets_at = five_hour.resets_at.expect("window must expire on its own");
+        assert!(
+            resets_at > chrono::Utc::now().timestamp(),
+            "reset time must be in the future"
+        );
     }
 }

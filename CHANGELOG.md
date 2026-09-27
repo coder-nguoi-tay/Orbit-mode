@@ -4,6 +4,15 @@
 
 ## September 2026
 
+### 09/28 · Fix — A working account is no longer marked out of quota
+After a chat switched accounts, the limit reading from the old account stayed
+attached to the chat and was recorded against the new one, marking a perfectly
+good account as spent — with no way back, so the rotation ran out of accounts.
+Readings now reset when a chat starts on a different account, a brief network
+throttle is no longer mistaken for the plan limit being reached, and "Check"
+on an account asks the service for its real usage instead of trusting the
+stored value, so an account wrongly marked spent recovers.
+
 ### 09/27 · Fix — Account buttons work again
 Renaming an account, removing one, and confirming an account switch all did
 nothing and reported an error, because they relied on a pop-up the app can no
