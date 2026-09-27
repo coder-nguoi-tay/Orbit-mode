@@ -132,6 +132,7 @@ fn build_account_handoff_packet(
     database: &DatabaseService,
     session: &Session,
     recent_summary: Option<&str>,
+    user_message: Option<&str>,
 ) -> String {
     let worktree = session
         .worktree_path
@@ -151,8 +152,14 @@ fn build_account_handoff_packet(
         .chars()
         .take(4_000)
         .collect();
+    let closing = match user_message {
+        Some(message) if !message.trim().is_empty() => {
+            format!("The user's next instruction:\n{}", message.trim())
+        }
+        _ => "Continue the outstanding work and verify changes.".to_string(),
+    };
     format!(
-        "Continue this Orbit-mode coding task in the same worktree. This is a new provider conversation after an account handoff. Inspect current files before editing.\n\nOriginal task:\n{task}\n\nWorktree: {worktree}\nBranch: {branch}\nGit status:\n{status}\nGit diff (bounded):\n{diff}\nRecent agent summary:\n{summary}\n\nContinue the outstanding work and verify changes."
+        "Continue this Orbit-mode coding task in the same worktree. This is a new provider conversation after an account handoff. Inspect current files before editing.\n\nOriginal task:\n{task}\n\nWorktree: {worktree}\nBranch: {branch}\nGit status:\n{status}\nGit diff (bounded):\n{diff}\nRecent agent summary:\n{summary}\n\n{closing}"
     )
 }
 
@@ -537,6 +544,7 @@ impl SessionManager {
             effort,
             registry,
             false,
+            None,
         )
     }
 
@@ -546,6 +554,8 @@ impl SessionManager {
     /// @param app The Tauri event emitter.
     /// @param session_id The session whose account became exhausted.
     /// @param registry The provider registry used for the new process.
+    /// @param user_message A message typed while the session was paused, carried into
+    ///        the handoff packet so switching accounts does not swallow it.
     /// @return Success when a configured fallback process has been scheduled.
     /// @throws String If no safe fallback is configured or the session cannot be resumed.
     /// @author ductv <ductv@getflycrm.com>
@@ -555,6 +565,7 @@ impl SessionManager {
         app: AppHandle,
         session_id: SessionId,
         registry: Arc<ProviderRegistry>,
+        user_message: Option<String>,
     ) -> Result<(), String> {
         let (target_account_id, model, effort) = {
             let session_manager = manager.read().unwrap_or_else(|error| error.into_inner());
@@ -619,6 +630,7 @@ impl SessionManager {
             effort,
             registry,
             true,
+            user_message,
         )
     }
 
@@ -632,6 +644,8 @@ impl SessionManager {
     /// @param effort The reasoning effort for the new process.
     /// @param registry The provider registry used for the new process.
     /// @param automatic Whether the handoff was caused by a configured quota fallback.
+    /// @param user_message A message typed while the session was paused, carried into
+    ///        the handoff packet so switching accounts does not swallow it.
     /// @return Success when the new process has been scheduled.
     /// @throws String If the session is not paused, remote or already spawning.
     /// @author ductv <ductv@getflycrm.com>
@@ -646,6 +660,7 @@ impl SessionManager {
         effort: Option<String>,
         registry: Arc<ProviderRegistry>,
         automatic: bool,
+        user_message: Option<String>,
     ) -> Result<(), String> {
         let prompt = {
             let mut session_manager = manager.write().unwrap_or_else(|error| error.into_inner());
@@ -689,8 +704,12 @@ impl SessionManager {
                     })
                 })
                 .and_then(|entry| entry.text.as_deref());
-            let prompt =
-                build_account_handoff_packet(&session_manager.db, &session, recent_summary);
+            let prompt = build_account_handoff_packet(
+                &session_manager.db,
+                &session,
+                recent_summary,
+                user_message.as_deref(),
+            );
             session_manager
                 .active
                 .entry(session_id)
@@ -1757,8 +1776,14 @@ impl SessionManager {
         // Collect exit status — prevents zombie on Unix, releases handle on Windows
         let _ = child.wait();
         if quota_exhausted
-            && Self::begin_automatic_account_handoff(manager, app.clone(), session_id, registry)
-                .is_err()
+            && Self::begin_automatic_account_handoff(
+                manager,
+                app.clone(),
+                session_id,
+                registry,
+                None,
+            )
+            .is_err()
         {
             let _ = app.emit(
                 "session:account-action-required",
@@ -1795,7 +1820,16 @@ impl SessionManager {
                 session.status == crate::models::SessionStatus::NeedsAccountAction
             })
         {
-            return Err("Choose an account or wait for the official quota reset".into());
+            // An account in the pool may have reset since the session was paused, so retry
+            // the handoff rather than making the user pick one that is still exhausted.
+            return Self::begin_automatic_account_handoff(
+                manager,
+                app,
+                session_id,
+                registry,
+                Some(text),
+            )
+            .map_err(|_| "Choose an account or wait for the official quota reset".to_string());
         }
         // Re-add to active map if missing (e.g. after app restart)
         {
@@ -2459,7 +2493,35 @@ fn is_rate_limit_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{assistant_with_tokens, make_db, seed_outputs, TestCase};
+    use crate::test_utils::{assistant_with_tokens, make_db, seed_outputs, seed_session, TestCase};
+
+    /// A message typed while the session was paused must survive the account switch.
+    ///
+    /// @return No value; assertions cover the packet with and without a message.
+    /// @throws Panic If the user's instruction is dropped from the handoff packet.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    #[test]
+    fn should_carry_a_pending_user_message_into_the_handoff_packet() {
+        let db = make_db();
+        let session_id = seed_session(&db);
+        let session = db.get_session(session_id).unwrap().unwrap();
+
+        let without = build_account_handoff_packet(&db, &session, None, None);
+        assert!(without.contains("Continue the outstanding work"));
+        assert!(!without.contains("next instruction"));
+
+        let with = build_account_handoff_packet(&db, &session, None, Some("  run the tests  "));
+        assert!(
+            with.contains("run the tests"),
+            "the pending message must reach the new process"
+        );
+        assert!(!with.contains("  run the tests  "), "message is trimmed");
+
+        // Whitespace-only input is not an instruction.
+        let blank = build_account_handoff_packet(&db, &session, None, Some("   "));
+        assert!(blank.contains("Continue the outstanding work"));
+    }
 
     /// Ensure temporary rate limits and estimates cannot pause a plan-quota session.
     ///

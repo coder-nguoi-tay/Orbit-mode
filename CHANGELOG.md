@@ -4,6 +4,12 @@
 
 ## September 2026
 
+### 09/28 · Fix — A paused chat retries the account switch when you reply
+Sending a message to a chat that was paused for a usage limit answered "choose
+an account or wait for the reset", even when another account had already freed
+up. Replying now retries the switch and carries your message across, so the
+chat continues on the next available account instead of dead-ending.
+
 ### 09/28 · Fix — Accounts recover on their own once their limit resets
 An account marked as out of quota stayed that way until a chat happened to run
 on it, which the automatic switch refused to do — so the app could end up with
