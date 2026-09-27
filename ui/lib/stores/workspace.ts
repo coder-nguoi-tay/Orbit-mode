@@ -83,16 +83,18 @@ export const workspace = writable<WorkspaceState>(defaultState());
  * @param sessionId Session to open or focus.
  * @return No value.
  * @author ductv <ductv@getflycrm.com>
- * @since 2026-09-26
+ * @since 2026-09-27
  */
 export function assignSession(paneId: string, sessionId: number): void {
   const state = get(workspace);
-  const pane = state.panes[paneId];
+  const resolvedPaneId = state.panes[paneId] ? paneId : Object.keys(state.panes)[0];
+  if (!resolvedPaneId) return;
+  const pane = state.panes[resolvedPaneId];
   const activeTab = pane?.tabs.find((tab) => tab.id === pane.activeTabId);
 
   if (activeTab && activeTab.target.kind !== 'agent') {
     const chatPaneId = Object.entries(state.panes).find(([candidatePaneId, candidatePane]) => {
-      if (candidatePaneId === paneId) return false;
+      if (candidatePaneId === resolvedPaneId) return false;
       const candidateTab = candidatePane.tabs.find((tab) => tab.id === candidatePane.activeTabId);
       return candidateTab?.target.kind === 'agent';
     })?.[0];
@@ -121,11 +123,11 @@ export function assignSession(paneId: string, sessionId: number): void {
       return;
     }
 
-    splitPane(paneId, 'horizontal', createTab({ kind: 'agent', sessionId }));
+    splitPane(resolvedPaneId, 'horizontal', createTab({ kind: 'agent', sessionId }));
     return;
   }
 
-  addTab(paneId, { kind: 'agent', sessionId });
+  addTab(resolvedPaneId, { kind: 'agent', sessionId });
 }
 
 export function addTab(paneId: string, target: TabTarget): void {
@@ -230,8 +232,14 @@ export function clearPane(paneId: string): void {
   });
 }
 
+/** Focus a pane only while it still belongs to the current workspace.
+ * @param paneId Pane requested by the latest pointer or keyboard event.
+ * @return No value; stale events targeting removed panes are ignored.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-27
+ */
 export function focusPane(paneId: string): void {
-  workspace.update((ws) => ({ ...ws, focusedPaneId: paneId }));
+  workspace.update((ws) => (ws.panes[paneId] ? { ...ws, focusedPaneId: paneId } : ws));
 }
 
 // ── Split actions ──────────────────────────────────────────────────────

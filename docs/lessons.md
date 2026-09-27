@@ -124,3 +124,13 @@ git checkout -b fix/chat-feed --no-track origin/dev
 **Vì sao:** WebView có thể giữ module graph của dev server trong lúc build thay generated runtime, tạo vòng import trộn phiên bản và lỗi TDZ như `Cannot access 'updated_listener' before initialization`.
 
 **Khi áp dụng:** Khi xác minh production build trong lúc cửa sổ Orbit development đang mở.
+
+---
+
+## Focus Pane Sau Khi Đóng Utility Panel
+
+**Quy tắc:** Nút đóng panel phải chặn event bubbling, và workspace không được nhận `focusedPaneId` trỏ tới pane đã bị xóa; thao tác mở session phải phục hồi về pane hợp lệ nếu nhận ID cũ.
+
+**Vì sao:** Click đóng Terminal/Git/File Editor xóa pane trước, sau đó click nổi lên container và focus lại chính pane đã xóa. Các lần chọn project tiếp theo gọi `assignSession` với pane không tồn tại nên không có phản hồi.
+
+**Khi áp dụng:** Khi thêm nút đóng, thao tác bất đồng bộ hoặc event bubbling có thể đồng thời thay đổi cây pane và trạng thái focus.

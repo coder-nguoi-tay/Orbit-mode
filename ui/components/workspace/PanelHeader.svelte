@@ -18,6 +18,17 @@
     status || model || (contextPercent != null && contextPercent > 0) || onClose
   );
   $: showCrumbExtra = Boolean(branch || path || meta);
+
+  /** Close the current panel without refocusing a pane removed by the close action.
+   * @param event Mouse event originating from the shared panel close button.
+   * @return No value; propagation stops before the pane container handles the click.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-27
+   */
+  function closePanel(event: MouseEvent): void {
+    event.stopPropagation();
+    onClose?.();
+  }
 </script>
 
 <header class="topbar quiet-topbar" class:focused>
@@ -61,7 +72,7 @@
         </span>
       {/if}
       {#if onClose}
-        <button class="close-btn" type="button" aria-label="Close panel" on:click={onClose}
+        <button class="close-btn" type="button" aria-label="Close panel" on:click={closePanel}
           >✕</button
         >
       {/if}

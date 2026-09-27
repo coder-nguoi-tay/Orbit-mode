@@ -1,6 +1,14 @@
 import { get } from 'svelte/store';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assignSession, createTab, restoreWorkspace, splitPane, workspace } from './workspace';
+import {
+  assignSession,
+  closeTab,
+  createTab,
+  focusPane,
+  restoreWorkspace,
+  splitPane,
+  workspace,
+} from './workspace';
 
 describe('workspace tabs', () => {
   const storage = new Map<string, string>();
@@ -46,5 +54,31 @@ describe('workspace tabs', () => {
 
     expect(state.panes[terminalPaneId]).toBeUndefined();
     expect(chatTab?.target).toEqual({ kind: 'agent', sessionId: 99 });
+  });
+
+  it('keeps project switching usable after closing a focused terminal pane', () => {
+    const chatPaneId = get(workspace).focusedPaneId!;
+    assignSession(chatPaneId, 42);
+    splitPane(
+      chatPaneId,
+      'horizontal',
+      createTab({ kind: 'terminal', terminalId: 'terminal-1', cwd: '/project' })
+    );
+
+    const terminalPaneId = get(workspace).focusedPaneId!;
+    const terminalTabId = get(workspace).panes[terminalPaneId].activeTabId!;
+    closeTab(terminalPaneId, terminalTabId);
+    focusPane(terminalPaneId);
+
+    expect(get(workspace).focusedPaneId).toBe(chatPaneId);
+
+    assignSession(terminalPaneId, 99);
+    const state = get(workspace);
+    const activeTab = state.panes[chatPaneId].tabs.find(
+      (tab) => tab.id === state.panes[chatPaneId].activeTabId
+    );
+
+    expect(state.panes[terminalPaneId]).toBeUndefined();
+    expect(activeTab?.target).toEqual({ kind: 'agent', sessionId: 99 });
   });
 });
