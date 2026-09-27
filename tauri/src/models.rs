@@ -149,6 +149,41 @@ impl AccountStatus {
         }
     }
 
+    /// Derive availability from a live quota reading.
+    ///
+    /// The busiest window decides: an account is only spent once a plan window is full.
+    ///
+    /// @param quota A freshly read set of plan windows.
+    /// @return The availability implied by those windows.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    pub fn from_quota(quota: &ProviderQuota) -> Self {
+        let peak = [quota.five_hour.as_ref(), quota.seven_day.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|window| window.utilization)
+            .fold(0.0_f64, f64::max);
+        if peak >= 1.0 {
+            Self::QuotaExceeded
+        } else if peak >= 0.9 {
+            Self::NearLimit
+        } else {
+            Self::Available
+        }
+    }
+
+    /// Report whether this state is about credentials rather than quota.
+    ///
+    /// @return True when only a re-login can change the state.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    pub fn is_authentication_problem(&self) -> bool {
+        matches!(
+            self,
+            Self::AuthExpired | Self::NeedsLogin | Self::Unavailable
+        )
+    }
+
     /// Read a persisted account state without assuming an unknown value is available.
     ///
     /// @param value The database status.
@@ -489,6 +524,61 @@ mod tests {
         assert_eq!(encoded, "\"chat_gpt_authenticated\"");
         let decoded: AccountAuthType = serde_json::from_str("\"chat_gpt_authenticated\"").unwrap();
         assert_eq!(decoded, AccountAuthType::ChatGPTAuthenticated);
+    }
+
+    fn quota_with(five_hour: f64, seven_day: f64) -> ProviderQuota {
+        let window = |utilization| {
+            Some(QuotaWindow {
+                utilization,
+                resets_at: None,
+                status: None,
+            })
+        };
+        ProviderQuota {
+            provider: "codex".into(),
+            account_key: "a".into(),
+            provider_account_id: Some("a".into()),
+            five_hour: window(five_hour),
+            seven_day: window(seven_day),
+            updated_at: "2026-09-28T00:00:00Z".into(),
+            source: "app_server".into(),
+        }
+    }
+
+    /// An idle account must read as available. Deriving it wrongly takes a healthy
+    /// profile out of the automatic handoff pool with no way back.
+    ///
+    /// @return No value; assertions cover each availability threshold.
+    /// @throws Panic If a live reading maps to the wrong availability.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    #[test]
+    fn should_derive_account_availability_from_live_windows() {
+        assert_eq!(
+            AccountStatus::from_quota(&quota_with(0.0, 0.0)),
+            AccountStatus::Available
+        );
+        assert_eq!(
+            AccountStatus::from_quota(&quota_with(0.91, 0.1)),
+            AccountStatus::NearLimit
+        );
+        assert_eq!(
+            AccountStatus::from_quota(&quota_with(1.0, 0.1)),
+            AccountStatus::QuotaExceeded
+        );
+        // The busiest window decides, whichever one it is.
+        assert_eq!(
+            AccountStatus::from_quota(&quota_with(0.1, 1.0)),
+            AccountStatus::QuotaExceeded
+        );
+    }
+
+    #[test]
+    fn should_treat_only_credential_states_as_authentication_problems() {
+        assert!(AccountStatus::NeedsLogin.is_authentication_problem());
+        assert!(AccountStatus::AuthExpired.is_authentication_problem());
+        assert!(!AccountStatus::QuotaExceeded.is_authentication_problem());
+        assert!(!AccountStatus::Available.is_authentication_problem());
     }
 
     #[test]

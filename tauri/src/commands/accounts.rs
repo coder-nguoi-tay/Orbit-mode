@@ -367,18 +367,7 @@ fn live_quota_status(account: &ProviderAccount) -> Option<AccountStatus> {
         Some(&account.id),
     )
     .ok()?;
-    let peak = [quota.five_hour.as_ref(), quota.seven_day.as_ref()]
-        .into_iter()
-        .flatten()
-        .map(|window| window.utilization)
-        .fold(0.0_f64, f64::max);
-    Some(if peak >= 1.0 {
-        AccountStatus::QuotaExceeded
-    } else if peak >= 0.9 {
-        AccountStatus::NearLimit
-    } else {
-        AccountStatus::Available
-    })
+    Some(AccountStatus::from_quota(&quota))
 }
 
 /// Stream temporary Codex device-login instructions, including the standalone one-time code,

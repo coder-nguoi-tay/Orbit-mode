@@ -4,6 +4,14 @@
 
 ## September 2026
 
+### 09/28 · Fix — Accounts recover on their own once their limit resets
+An account marked as out of quota stayed that way until a chat happened to run
+on it, which the automatic switch refused to do — so the app could end up with
+every account marked spent and nothing to switch to. Orbit already reads each
+account's real usage on startup; it now applies what it reads, so an account
+whose window has reset, or one that was marked spent by mistake, comes back
+by itself and any chat waiting on it becomes resumable.
+
 ### 09/28 · Fix — A working account is no longer marked out of quota
 After a chat switched accounts, the limit reading from the old account stayed
 attached to the chat and was recorded against the new one, marking a perfectly

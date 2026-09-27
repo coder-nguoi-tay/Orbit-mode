@@ -296,6 +296,7 @@ pub async fn refresh_codex_quotas(
     use tauri::Emitter;
 
     let db = std::sync::Arc::clone(&state.read().db);
+    let reconcile_app = app.clone();
 
     let quotas = tauri::async_runtime::spawn_blocking(move || {
         let Some(executable) = crate::services::spawn_manager::find_codex() else {
@@ -328,6 +329,7 @@ pub async fn refresh_codex_quotas(
                 ) {
                     Ok(quota) => {
                         let _ = db.record_provider_quota(&quota);
+                        reconcile_account_status(&db, &quota, &reconcile_app);
                         Some(quota)
                     }
                     Err(error) => {
@@ -345,4 +347,57 @@ pub async fn refresh_codex_quotas(
         let _ = app.emit("provider:quota-updated", quota);
     }
     Ok(quotas)
+}
+
+/// Bring one account's stored availability back in line with its live plan windows.
+///
+/// Quota state is otherwise only written while a session streams events, so an account
+/// marked spent stays that way even after its window resets — and the handoff pool then
+/// has nothing left to choose. Authentication states are left alone; only a re-login
+/// clears those.
+///
+/// @param db The shared database.
+/// @param quota The live reading for one account.
+/// @param app Event emitter for `provider:account-updated`.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-28
+fn reconcile_account_status(
+    db: &std::sync::Arc<crate::services::database::DatabaseService>,
+    quota: &crate::models::ProviderQuota,
+    app: &tauri::AppHandle,
+) {
+    use tauri::Emitter;
+
+    let Some(account_id) = quota.provider_account_id.as_deref() else {
+        return;
+    };
+    let Ok(Some(account)) = db.get_provider_account(account_id) else {
+        return;
+    };
+    if account.status.is_authentication_problem() {
+        return;
+    }
+    let next_status = crate::models::AccountStatus::from_quota(quota);
+    if account.status == next_status {
+        return;
+    }
+    let recovered = account.status == crate::models::AccountStatus::QuotaExceeded
+        && next_status != crate::models::AccountStatus::QuotaExceeded;
+    if db
+        .update_provider_account_status(account_id, next_status.clone())
+        .is_err()
+    {
+        return;
+    }
+    let _ = app.emit(
+        "provider:account-updated",
+        serde_json::json!({ "accountId": account_id, "status": next_status }),
+    );
+    if recovered {
+        let _ = db.mark_account_sessions_ready(account_id);
+        let _ = app.emit(
+            "provider:account-ready",
+            serde_json::json!({ "accountId": account_id }),
+        );
+    }
 }
