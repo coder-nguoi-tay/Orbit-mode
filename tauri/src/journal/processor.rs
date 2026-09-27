@@ -1045,24 +1045,31 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
                     }
 
                     if let Some(rate_limits) = payload.get("rate_limits") {
-                        if let Some(primary) = rate_limits.get("primary").filter(|v| !v.is_null()) {
-                            let used_pct = primary
+                        let mut any_exceeded = false;
+                        for window_key in ["primary", "secondary"] {
+                            let Some(window) =
+                                rate_limits.get(window_key).filter(|v| !v.is_null())
+                            else {
+                                continue;
+                            };
+                            let used_pct = window
                                 .get("used_percent")
                                 .and_then(|v| v.as_f64())
                                 .unwrap_or(0.0);
-                            let window_min = primary
+                            let default_minutes = if window_key == "primary" { 10080 } else { 300 };
+                            let window_min = window
                                 .get("window_minutes")
                                 .and_then(|v| v.as_u64())
-                                .unwrap_or(10080);
-                            let resets_at = primary.get("resets_at").and_then(|v| v.as_i64());
-                            let limit_type = if window_min >= 1440 {
-                                "seven_day"
-                            } else {
-                                "five_hour"
-                            };
-
+                                .unwrap_or(default_minutes);
+                            let resets_at = window.get("resets_at").and_then(|v| v.as_i64());
+                            let limit_type = if window_min >= 1440 { "seven_day" } else { "five_hour" };
+                            // Treat >=100% as exceeded so the automatic handoff path fires.
+                            let status = if used_pct >= 100.0 { "exceeded" } else { "normal" };
+                            if status == "exceeded" {
+                                any_exceeded = true;
+                            }
                             let entry = crate::models::RateLimitInfo {
-                                status: "normal".into(),
+                                status: status.into(),
                                 rate_limit_type: limit_type.into(),
                                 utilization: used_pct / 100.0,
                                 resets_at,
@@ -1079,40 +1086,12 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
                                 state.rate_limit.push(entry);
                             }
                         }
-
-                        if let Some(sec) = rate_limits.get("secondary").filter(|v| !v.is_null()) {
-                            let used_pct = sec
-                                .get("used_percent")
-                                .and_then(|v| v.as_f64())
-                                .unwrap_or(0.0);
-                            let window_min = sec
-                                .get("window_minutes")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(300);
-                            let resets_at = sec.get("resets_at").and_then(|v| v.as_i64());
-                            let limit_type = if window_min >= 1440 {
-                                "seven_day"
-                            } else {
-                                "five_hour"
+                        if any_exceeded {
+                            state.attention = crate::models::AttentionState {
+                                requires_attention: true,
+                                reason: Some(crate::models::AttentionReason::RateLimit),
+                                since: Some(chrono::Utc::now().to_rfc3339()),
                             };
-
-                            let entry = crate::models::RateLimitInfo {
-                                status: "normal".into(),
-                                rate_limit_type: limit_type.into(),
-                                utilization: used_pct / 100.0,
-                                resets_at,
-                                is_using_overage: false,
-                                surpassed_threshold: 0.0,
-                            };
-                            if let Some(existing) = state
-                                .rate_limit
-                                .iter_mut()
-                                .find(|r| r.rate_limit_type == limit_type)
-                            {
-                                *existing = entry;
-                            } else {
-                                state.rate_limit.push(entry);
-                            }
                         }
                     }
                 }
@@ -1829,5 +1808,55 @@ mod helper_tests {
             .expect("missing seven-day quota");
         assert_eq!(five_hour.utilization, 0.15);
         assert_eq!(seven_day.utilization, 0.02);
+        assert_eq!(five_hour.status, "normal");
+        assert_eq!(seven_day.status, "normal");
+        assert!(!state.attention.requires_attention);
+    }
+
+    #[test]
+    fn codex_quota_exhausted_sets_exceeded_status_and_attention() {
+        let mut state = JournalState::default();
+        let line = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {},
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 100.0,
+                        "window_minutes": 300,
+                        "resets_at": 1790372282i64
+                    },
+                    "secondary": {
+                        "used_percent": 45.0,
+                        "window_minutes": 10080,
+                        "resets_at": 1790959082i64
+                    }
+                }
+            }
+        });
+
+        process_line_codex(&mut state, &line.to_string());
+
+        let five_hour = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "five_hour")
+            .expect("missing five-hour quota");
+        assert_eq!(five_hour.status, "exceeded", "100% should be exceeded");
+        assert_eq!(five_hour.utilization, 1.0);
+
+        let seven_day = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "seven_day")
+            .expect("missing seven-day quota");
+        assert_eq!(seven_day.status, "normal", "45% should remain normal");
+
+        assert!(state.attention.requires_attention, "attention required when quota exceeded");
+        assert_eq!(
+            state.attention.reason,
+            Some(crate::models::AttentionReason::RateLimit)
+        );
     }
 }
