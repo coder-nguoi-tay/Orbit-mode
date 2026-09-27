@@ -1047,8 +1047,7 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
                     if let Some(rate_limits) = payload.get("rate_limits") {
                         let mut any_exceeded = false;
                         for window_key in ["primary", "secondary"] {
-                            let Some(window) =
-                                rate_limits.get(window_key).filter(|v| !v.is_null())
+                            let Some(window) = rate_limits.get(window_key).filter(|v| !v.is_null())
                             else {
                                 continue;
                             };
@@ -1062,9 +1061,17 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(default_minutes);
                             let resets_at = window.get("resets_at").and_then(|v| v.as_i64());
-                            let limit_type = if window_min >= 1440 { "seven_day" } else { "five_hour" };
+                            let limit_type = if window_min >= 1440 {
+                                "seven_day"
+                            } else {
+                                "five_hour"
+                            };
                             // Treat >=100% as exceeded so the automatic handoff path fires.
-                            let status = if used_pct >= 100.0 { "exceeded" } else { "normal" };
+                            let status = if used_pct >= 100.0 {
+                                "exceeded"
+                            } else {
+                                "normal"
+                            };
                             if status == "exceeded" {
                                 any_exceeded = true;
                             }
@@ -1098,11 +1105,80 @@ pub fn process_line_codex(state: &mut JournalState, line: &str) {
             }
         }
 
+        // Codex reports plan exhaustion only as prose inside its failure events.
+        "error" | "stream_error" | "turn.failed" => {
+            let message = val
+                .pointer("/error/message")
+                .or_else(|| val.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if !message.is_empty() {
+                state.entries.push(JournalEntry {
+                    entry_type: JournalEntryType::System,
+                    text: Some(message.clone()),
+                    ..JournalEntry::default()
+                });
+            }
+            state.status = AgentStatus::Idle;
+
+            if is_codex_quota_message(&message) {
+                mark_codex_plan_quota_exceeded(state);
+            }
+        }
+
         // User messages are stored in Claude format by emit_spawn_started
         _ => {
             process_line(state, line);
         }
     }
+}
+
+/// Recognize the plan-limit wording Codex uses when it refuses to run a turn.
+///
+/// @param message The error text from a Codex failure event.
+/// @return True when the text names a usage, rate or quota limit.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-27
+fn is_codex_quota_message(message: &str) -> bool {
+    let lowered = message.to_lowercase();
+    ["usage limit", "rate limit", "rate_limit", "quota"]
+        .iter()
+        .any(|marker| lowered.contains(marker))
+}
+
+/// Mark the five-hour plan window exhausted so the automatic handoff path fires.
+///
+/// Any reset time learned from an earlier `token_count` event is preserved, so the
+/// UI can still count down instead of showing an idle session.
+///
+/// @param state The journal state whose quota windows are updated.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-27
+fn mark_codex_plan_quota_exceeded(state: &mut JournalState) {
+    if let Some(existing) = state
+        .rate_limit
+        .iter_mut()
+        .find(|limit| limit.rate_limit_type == "five_hour")
+    {
+        existing.status = "exceeded".into();
+        existing.utilization = existing.utilization.max(1.0);
+    } else {
+        state.rate_limit.push(crate::models::RateLimitInfo {
+            status: "exceeded".into(),
+            rate_limit_type: "five_hour".into(),
+            utilization: 1.0,
+            resets_at: None,
+            is_using_overage: false,
+            surpassed_threshold: 0.0,
+        });
+    }
+    state.attention = crate::models::AttentionState {
+        requires_attention: true,
+        reason: Some(crate::models::AttentionReason::RateLimit),
+        since: Some(chrono::Utc::now().to_rfc3339()),
+    };
 }
 
 #[cfg(test)]
@@ -1853,10 +1929,74 @@ mod helper_tests {
             .expect("missing seven-day quota");
         assert_eq!(seven_day.status, "normal", "45% should remain normal");
 
-        assert!(state.attention.requires_attention, "attention required when quota exceeded");
+        assert!(
+            state.attention.requires_attention,
+            "attention required when quota exceeded"
+        );
         assert_eq!(
             state.attention.reason,
             Some(crate::models::AttentionReason::RateLimit)
         );
+    }
+
+    #[test]
+    fn codex_usage_limit_error_marks_plan_quota_exceeded() {
+        let mut state = JournalState::default();
+        // A prior sample supplies the reset time the UI counts down from.
+        state.rate_limit.push(crate::models::RateLimitInfo {
+            status: "normal".into(),
+            rate_limit_type: "five_hour".into(),
+            utilization: 0.98,
+            resets_at: Some(1790372282),
+            is_using_overage: false,
+            surpassed_threshold: 0.0,
+        });
+        let line = serde_json::json!({
+            "type": "error",
+            "message": "You've hit your usage limit. Try again in 4h 32m."
+        });
+
+        process_line_codex(&mut state, &line.to_string());
+
+        let five_hour = state
+            .rate_limit
+            .iter()
+            .find(|limit| limit.rate_limit_type == "five_hour")
+            .expect("missing five-hour quota");
+        assert_eq!(five_hour.status, "exceeded");
+        assert_eq!(five_hour.utilization, 1.0);
+        assert_eq!(
+            five_hour.resets_at,
+            Some(1790372282),
+            "reset time preserved"
+        );
+        assert_eq!(
+            state.attention.reason,
+            Some(crate::models::AttentionReason::RateLimit)
+        );
+        assert!(
+            state
+                .entries
+                .iter()
+                .any(|entry| entry.entry_type == JournalEntryType::System),
+            "error text surfaced to the feed"
+        );
+    }
+
+    #[test]
+    fn codex_turn_failed_without_quota_wording_stays_normal() {
+        let mut state = JournalState::default();
+        let line = serde_json::json!({
+            "type": "turn.failed",
+            "error": { "message": "connection reset by peer" }
+        });
+
+        process_line_codex(&mut state, &line.to_string());
+
+        assert!(
+            state.rate_limit.is_empty(),
+            "non-quota failure must not pause the session"
+        );
+        assert!(!state.attention.requires_attention);
     }
 }

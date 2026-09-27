@@ -1910,11 +1910,14 @@ impl DatabaseService {
             != 0)
     }
 
-    /// Select the next configured account that has not already handled this session.
+    /// Select the least recently used account in the automatic handoff pool.
+    ///
+    /// Accounts are excluded by their current status, not by session history: a window
+    /// that has since reset must become eligible again, otherwise a two-account rotation
+    /// deadlocks after its first handoff.
     ///
     /// @param provider_id The provider required by the session.
     /// @param execution_scope The execution scope required by the session.
-    /// @param session_id The session whose prior automatic targets are excluded.
     /// @param source_account_id The exhausted account to exclude.
     /// @return The first available account ordered by least recent use.
     /// @throws rusqlite::Error If SQLite cannot read the pool.
@@ -1924,7 +1927,6 @@ impl DatabaseService {
         &self,
         provider_id: &str,
         execution_scope: &str,
-        session_id: SessionId,
         source_account_id: &str,
     ) -> SqlResult<Option<ProviderAccount>> {
         let conn = self.conn.lock().unwrap_or_else(|error| error.into_inner());
@@ -1934,16 +1936,11 @@ impl DatabaseService {
              JOIN provider_account_auto_pool p ON p.account_id = a.id AND p.enabled = 1
              WHERE a.provider_id = ?1 AND a.execution_scope = ?2 AND a.id != ?3
                AND a.status IN ('available', 'busy', 'near_limit')
-               AND NOT EXISTS (
-                 SELECT 1 FROM session_account_history h
-                 WHERE h.session_id = ?4 AND h.account_id = a.id
-                   AND h.event IN ('selected', 'handoff_from', 'handoff_to', 'automatic_handoff_to')
-               )
              ORDER BY a.last_used_at IS NOT NULL, a.last_used_at, a.created_at
              LIMIT 1";
         conn.query_row(
             query,
-            params![provider_id, execution_scope, source_account_id, session_id],
+            params![provider_id, execution_scope, source_account_id],
             provider_account_from_row,
         )
         .optional()
@@ -2426,14 +2423,14 @@ mod tests {
         assert_eq!(overview.token_usage_history[0].total_tokens, 300);
     }
 
-    /// Verify checked profiles are selected one time each without returning to an exhausted account.
+    /// Verify the pool skips exhausted profiles and reuses one once its window resets.
     ///
-    /// @return No value; assertions verify pool selection and session history guards.
-    /// @throws Panic If the automatic pool does not respect account history.
+    /// @return No value; assertions verify status-based eligibility across a rotation.
+    /// @throws Panic If an exhausted account is offered, or a reset one stays blocked.
     /// @author ductv <ductv@getflycrm.com>
     /// @since 2026-09-26
     #[test]
-    fn should_select_each_enabled_auto_handoff_account_once() {
+    fn should_rotate_auto_handoff_accounts_by_current_status() {
         let database = make_db();
         let project = database
             .create_project("CRM", "/tmp/account-auto-pool-test")
@@ -2479,8 +2476,12 @@ mod tests {
             .set_session_provider_account(session_id, Some("profile-a"))
             .unwrap();
 
+        // profile-a is exhausted, so the pool hands the session to the next profile.
+        database
+            .update_provider_account_status("profile-a", AccountStatus::QuotaExceeded)
+            .unwrap();
         let next = database
-            .next_auto_handoff_account("codex", "local", session_id, "profile-a")
+            .next_auto_handoff_account("codex", "local", "profile-a")
             .unwrap()
             .unwrap();
         assert_eq!(next.id, "profile-b");
@@ -2493,11 +2494,30 @@ mod tests {
                 "automatic_handoff_to",
             )
             .unwrap();
+
+        // profile-b exhausts too; profile-a is still blocked so profile-c is next.
+        database
+            .update_provider_account_status("profile-b", AccountStatus::QuotaExceeded)
+            .unwrap();
         let next = database
-            .next_auto_handoff_account("codex", "local", session_id, "profile-b")
+            .next_auto_handoff_account("codex", "local", "profile-b")
             .unwrap()
             .unwrap();
         assert_eq!(next.id, "profile-c");
+
+        // Once profile-a's window resets it must become eligible again, otherwise a
+        // rotation deadlocks after every account has been touched once.
+        database
+            .update_provider_account_status("profile-a", AccountStatus::Available)
+            .unwrap();
+        database
+            .update_provider_account_status("profile-c", AccountStatus::QuotaExceeded)
+            .unwrap();
+        let next = database
+            .next_auto_handoff_account("codex", "local", "profile-c")
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.id, "profile-a", "a reset account must be reusable");
     }
 
     // ── Projects ─────────────────────────────────────────────────────────

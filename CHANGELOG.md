@@ -2,6 +2,22 @@
 
 ---
 
+## September 2026
+
+### 09/27 · Fix — Codex switches accounts when a plan limit is reached
+When Codex stopped because the 5-hour plan limit was reached, the chat used to go
+quiet with no explanation and stayed on the exhausted account. Orbit now recognises
+the limit message, shows it in the conversation along with the reset countdown, and
+hands the session to the next account in your automatic handoff pool.
+
+### 09/27 · Fix — Accounts can take turns again after their limit resets
+A chat could only switch accounts once. Every profile it had already used stayed
+blocked for the rest of that conversation, so a two-account rotation ran out of
+options after the first switch. Accounts are now chosen by whether their limit is
+currently free, so one that has reset becomes available to the same chat again.
+
+---
+
 ## June 2026
 
 ### 06/09 · Release — Version 6.0.2

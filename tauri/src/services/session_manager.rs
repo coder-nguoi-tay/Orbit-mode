@@ -572,12 +572,7 @@ impl SessionManager {
                 .ok_or_else(|| "Session has no account binding".to_string())?;
             let target = session_manager
                 .db
-                .next_auto_handoff_account(
-                    &session.provider,
-                    "local",
-                    session_id,
-                    source_account_id,
-                )
+                .next_auto_handoff_account(&session.provider, "local", source_account_id)
                 .map_err(|error| error.to_string())?
                 .or_else(|| {
                     session_manager
