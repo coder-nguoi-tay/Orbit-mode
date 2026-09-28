@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import type { Session } from '../lib/stores/sessions';
   import { providerAccounts, refreshProviderAccounts } from '../lib/stores/providerAccounts';
-  import { getAccountModels, switchSessionProviderAccount } from '../lib/tauri/accounts';
+  import { getAccountModels, switchSessionProviderAccount, switchSessionProvider } from '../lib/tauri/accounts';
+  import { onSessionHandoffFailed } from '../lib/tauri/events';
   import type { AccountModelAvailability } from '../lib/tauri/accounts';
   import { gitOverview } from '../lib/tauri/git';
   import Modal from './shared/Modal.svelte';
@@ -19,6 +20,26 @@
   let loadingModels = false;
   let starting = false;
   let error = '';
+  let alternateProvider: 'codex' | 'claude-code';
+  $: alternateProvider = session.provider === 'codex' ? 'claude-code' : 'codex';
+  $: alternateName = alternateProvider === 'codex' ? 'Codex' : 'Claude';
+
+  /** Continue the paused conversation with the other available CLI provider.
+   * @return Completion after the provider handoff is scheduled.
+   * @throws Backend errors remain visible while the original account stays bound.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-28
+   */
+  async function switchAgent(): Promise<void> {
+    starting = true;
+    error = '';
+    try {
+      await switchSessionProvider(session.id, alternateProvider);
+    } catch (failure) {
+      error = String(failure);
+      starting = false;
+    }
+  }
 
   $: sourceAccount = session.providerAccountId
     ? $providerAccounts[session.providerAccountId]
@@ -34,6 +55,16 @@
   $: selectedModel = availableModels.find((available) => available.model.id === model);
 
   onMount(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+    void onSessionHandoffFailed((failure) => {
+      if (failure.sessionId !== session.id) return;
+      starting = false;
+      error = failure.error;
+    }).then((cleanup) => {
+      if (mounted) unlisten = cleanup;
+      else cleanup();
+    });
     refreshProviderAccounts().catch((failure) => (error = String(failure)));
     const worktree = session.worktreePath || session.cwd;
     if (worktree) {
@@ -44,6 +75,10 @@
         })
         .catch(() => {});
     }
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
   });
 
   /** Discover models and efforts within the user-selected target profile.
@@ -146,6 +181,7 @@
     {#if starting}<p role="status">Starting a new process with the selected profile…</p>{/if}
     <div class="actions">
       <button on:click={onClose} disabled={starting}>Keep paused</button>
+      <button on:click={switchAgent} disabled={starting}>Switch to {alternateName}</button>
       <button
         class="primary"
         on:click={confirmHandoff}

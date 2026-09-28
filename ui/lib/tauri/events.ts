@@ -135,25 +135,25 @@ export function onSessionAccountActionRequired(
  * @since 2026-09-25
  */
 export function onSessionAccountChanged(
-  callback: (payload: { sessionId: number; providerAccountId: string }) => void
+  callback: (payload: { sessionId: number; providerAccountId: string | null; provider: string; model: string }) => void
 ): Promise<() => void> {
-  return listen<{ sessionId: number; providerAccountId: string }>(
+  return listen<{ sessionId: number; providerAccountId: string | null; provider: string; model: string }>(
     'session:account-changed',
     (event) => callback(event.payload)
   );
 }
 
 /** Observe a failed handoff while the original account binding stays intact.
- * @param callback Receives the failed session and error.
+ * @param callback Receives the failed session, error, and restored status.
  * @return Event listener cleanup handle.
  * @throws When the event listener cannot be installed.
  * @author ductv <ductv@getflycrm.com>
- * @since 2026-09-25
+ * @since 2026-09-28
  */
 export function onSessionHandoffFailed(
-  callback: (payload: { sessionId: number; error: string }) => void
+  callback: (payload: { sessionId: number; error: string; status?: 'completed' | 'stopped' | 'error' | 'needs_account_action' | 'ready_to_resume' }) => void
 ): Promise<() => void> {
-  return listen<{ sessionId: number; error: string }>('session:handoff-failed', (event) =>
+  return listen<{ sessionId: number; error: string; status?: 'completed' | 'stopped' | 'error' | 'needs_account_action' | 'ready_to_resume' }>('session:handoff-failed', (event) =>
     callback(event.payload)
   );
 }

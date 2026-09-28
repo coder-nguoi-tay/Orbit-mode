@@ -210,6 +210,21 @@ export function switchSessionProviderAccount(
   });
 }
 
+/** Continue the current project conversation with the other installed agent CLI.
+ * @param sessionId Existing Orbit conversation.
+ * @param targetProviderId Claude Code or Codex provider ID.
+ * @return Completion after a new provider turn is scheduled.
+ * @throws When the source is busy or the target is unavailable.
+ * @author ductv <ductv@getflycrm.com>
+ * @since 2026-09-28
+ */
+export function switchSessionProvider(
+  sessionId: number,
+  targetProviderId: 'claude-code' | 'codex'
+): Promise<void> {
+  return invoke('switch_session_provider', { sessionId, targetProviderId });
+}
+
 /** Read a session's non-sensitive account transition history.
  * @param sessionId Orbit session ID.
  * @return Chronological account events.

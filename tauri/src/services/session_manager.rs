@@ -73,7 +73,9 @@ struct ActiveSession {
 
 #[derive(Clone)]
 struct PendingAccountHandoff {
-    target_account_id: String,
+    target_provider_id: String,
+    target_account_id: Option<String>,
+    previous_status: crate::models::SessionStatus,
     model: String,
     effort: Option<String>,
     automatic: bool,
@@ -120,18 +122,19 @@ fn git_handoff_fact(worktree: &str, arguments: &[&str]) -> String {
         .unwrap_or_else(|| "Unavailable".into())
 }
 
-/// Build a local task packet for a fresh provider conversation on another account.
+/// Build bounded continuity context for a fresh provider conversation in the same worktree.
 ///
-/// @param database The session's stored original user request.
+/// @param database The session's stored original user request and project state.
 /// @param session The session whose worktree remains in place.
-/// @param recent_summary The last useful locally stored assistant message.
+/// @param recent_entries Bounded local transcript entries from the current session.
+/// @param user_message New instruction entered while switching providers.
 /// @return Bounded context emphasizing Git state and outstanding task.
 /// @author ductv <ductv@getflycrm.com>
-/// @since 2026-09-25
+/// @since 2026-09-28
 fn build_account_handoff_packet(
     database: &DatabaseService,
     session: &Session,
-    recent_summary: Option<&str>,
+    recent_entries: &[crate::models::JournalEntry],
     user_message: Option<&str>,
 ) -> String {
     let worktree = session
@@ -146,12 +149,36 @@ fn build_account_handoff_packet(
         .unwrap_or_else(|| "Continue the work in this existing worktree.".into());
     let branch = git_handoff_fact(worktree, &["branch", "--show-current"]);
     let status = git_handoff_fact(worktree, &["status", "--short"]);
-    let diff = git_handoff_fact(worktree, &["diff", "--"]);
-    let summary: String = recent_summary
-        .unwrap_or("Unavailable")
-        .chars()
-        .take(4_000)
-        .collect();
+    let diff = git_handoff_fact(worktree, &["diff", "HEAD", "--"]);
+    let mut recent_context = Vec::new();
+    let mut context_characters = 0;
+    for entry in recent_entries.iter().rev() {
+        if recent_context.len() >= 18 || context_characters >= 12_000 {
+            break;
+        }
+        let (label, content) = match entry.entry_type {
+            crate::models::JournalEntryType::User => ("User", entry.text.as_deref()),
+            crate::models::JournalEntryType::Assistant => ("Assistant", entry.text.as_deref()),
+            crate::models::JournalEntryType::Progress => ("Progress", entry.text.as_deref()),
+            crate::models::JournalEntryType::System => ("System", entry.text.as_deref()),
+            crate::models::JournalEntryType::ToolCall => ("Tool", entry.tool.as_deref()),
+            crate::models::JournalEntryType::Thinking
+            | crate::models::JournalEntryType::ToolResult => continue,
+        };
+        let Some(content) = content.filter(|content| !content.trim().is_empty()) else {
+            continue;
+        };
+        let remaining = 12_000 - context_characters;
+        let content: String = content.chars().take(remaining.min(1_500)).collect();
+        context_characters += content.chars().count();
+        recent_context.push(format!("{label}: {content}"));
+    }
+    recent_context.reverse();
+    let recent_context = if recent_context.is_empty() {
+        "Unavailable".to_string()
+    } else {
+        recent_context.join("\n")
+    };
     let closing = match user_message {
         Some(message) if !message.trim().is_empty() => {
             format!("The user's next instruction:\n{}", message.trim())
@@ -159,8 +186,33 @@ fn build_account_handoff_packet(
         _ => "Continue the outstanding work and verify changes.".to_string(),
     };
     format!(
-        "Continue this Orbit-mode coding task in the same worktree. This is a new provider conversation after an account handoff. Inspect current files before editing.\n\nOriginal task:\n{task}\n\nWorktree: {worktree}\nBranch: {branch}\nGit status:\n{status}\nGit diff (bounded):\n{diff}\nRecent agent summary:\n{summary}\n\n{closing}"
+        "Continue this Orbit-mode coding task in the same worktree. This is a new provider conversation after an account handoff. Preserve the user's instructions and continue the latest unfinished work; inspect current files before editing.\n\nOriginal task:\n{task}\n\nWorktree: {worktree}\nBranch: {branch}\nGit status:\n{status}\nGit diff (bounded):\n{diff}\nRecent conversation and progress:\n{recent_context}\n\n{closing}"
     )
+}
+
+/// Check the latest Claude subscription window before switching from an exhausted provider.
+/// @param database Session database containing provider quota snapshots.
+/// @return True when no current Claude plan window reports exhaustion.
+/// @throws String If quota snapshots cannot be read.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-28
+fn claude_quota_available(database: &DatabaseService) -> Result<bool, String> {
+    Ok(!database
+        .get_latest_provider_quotas()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .filter(|quota| quota.provider == "claude-code" && quota.account_key == "default")
+        .flat_map(|quota| {
+            [quota.five_hour.as_ref(), quota.seven_day.as_ref()]
+                .into_iter()
+                .flatten()
+        })
+        .any(|window| {
+            matches!(window.status.as_deref(), Some("exceeded" | "blocked"))
+                && window
+                    .resets_at
+                    .is_none_or(|reset_at| reset_at > chrono::Utc::now().timestamp())
+        }))
 }
 
 type CodexHandoffOutput = (Vec<u8>, std::io::BufReader<Box<dyn std::io::Read + Send>>);
@@ -233,6 +285,67 @@ fn verify_codex_handoff_started(
         }
         Ok(Err(error)) => Err(error),
         Err(_) => Err("Codex did not confirm the account handoff in time".into()),
+    }
+}
+
+/// Confirm a new provider turn before changing the persisted session owner.
+/// @param handle Spawned provider process with unread JSON output.
+/// @param provider_id Provider whose startup event must be observed.
+/// @return Success with consumed JSON lines restored for normal processing.
+/// @throws String If the provider rejects the turn or does not respond in time.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-28
+fn verify_provider_handoff_started(
+    handle: &mut crate::services::spawn_manager::SpawnHandle,
+    provider_id: &str,
+) -> Result<(), String> {
+    if provider_id == "codex" {
+        return verify_codex_handoff_started(handle);
+    }
+    use std::io::{BufRead, Read};
+    let stdout = std::mem::replace(&mut handle.reader, Box::new(std::io::empty()));
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut startup_output = Vec::new();
+        for _ in 0..128 {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                let _ = sender.send(Err("Claude exited before starting a turn".to_string()));
+                return;
+            }
+            startup_output.extend_from_slice(line.as_bytes());
+            if startup_output.len() > 262_144 {
+                let _ = sender.send(Err(
+                    "Claude startup output exceeded the safe limit".to_string()
+                ));
+                return;
+            }
+            let event = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_default();
+            match event.get("type").and_then(|value| value.as_str()) {
+                Some("assistant") => {
+                    let _ = sender.send(Ok((startup_output, reader)));
+                    return;
+                }
+                Some("result")
+                    if event.get("is_error").and_then(|value| value.as_bool()) == Some(true) =>
+                {
+                    let _ =
+                        sender.send(Err("Claude rejected the target login or quota".to_string()));
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let _ = sender.send(Err("Claude did not start a model turn".to_string()));
+    });
+    match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(Ok((startup_output, reader))) => {
+            handle.reader = Box::new(std::io::Cursor::new(startup_output).chain(reader));
+            Ok(())
+        }
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err("Claude did not confirm the provider switch in time".into()),
     }
 }
 
@@ -359,6 +472,7 @@ impl SessionManager {
         } else {
             None
         };
+
         if let Some(ref account_id) = provider_account_id {
             self.db
                 .set_session_provider_account(session_id, Some(account_id))
@@ -567,21 +681,15 @@ impl SessionManager {
         registry: Arc<ProviderRegistry>,
         user_message: Option<String>,
     ) -> Result<(), String> {
-        let (target_account_id, model, effort) = {
+        let (target_provider_id, target_account_id, model, effort) = {
             let session_manager = manager.read().unwrap_or_else(|error| error.into_inner());
             let session = session_manager
                 .db
                 .get_session(session_id)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "Session not found".to_string())?;
-            if session.provider != "codex" {
-                return Err("Automatic account handoff is currently enabled for Codex only".into());
-            }
-            let source_account_id = session
-                .provider_account_id
-                .as_deref()
-                .ok_or_else(|| "Session has no account binding".to_string())?;
-            let target = session_manager
+            let source_account_id = session.provider_account_id.as_deref().unwrap_or("");
+            let same_provider_account = session_manager
                 .db
                 .next_auto_handoff_account(&session.provider, "local", source_account_id)
                 .map_err(|error| error.to_string())?
@@ -591,10 +699,10 @@ impl SessionManager {
                         .get_provider_account_fallback(source_account_id)
                         .ok()
                         .flatten()
-                        .and_then(|target_id| {
+                        .and_then(|account_id| {
                             session_manager
                                 .db
-                                .get_provider_account(&target_id)
+                                .get_provider_account(&account_id)
                                 .ok()
                                 .flatten()
                         })
@@ -608,23 +716,42 @@ impl SessionManager {
                                         | crate::models::AccountStatus::NearLimit
                                 )
                         })
-                })
-                .ok_or_else(|| {
-                    "No enabled available account is configured for automatic handoff".to_string()
-                })?;
-            (
-                target.id,
-                session.model.unwrap_or_else(|| "auto".into()),
-                session_manager
-                    .active
-                    .get(&session_id)
-                    .and_then(|active| active.effort.clone()),
-            )
+                });
+            if let Some(target) = same_provider_account {
+                (
+                    session.provider,
+                    Some(target.id),
+                    session.model.unwrap_or_else(|| "auto".into()),
+                    session_manager
+                        .active
+                        .get(&session_id)
+                        .and_then(|active| active.effort.clone()),
+                )
+            } else if session.provider == "codex"
+                && claude_quota_available(&session_manager.db)?
+                && crate::services::spawn_manager::find_claude().is_some()
+            {
+                ("claude-code".into(), None, "auto".into(), None)
+            } else if session.provider == "claude-code"
+                && crate::services::spawn_manager::find_codex().is_some()
+            {
+                let target = session_manager
+                    .db
+                    .next_auto_handoff_account("codex", "local", "")
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| {
+                        "No available Codex account is enabled for automatic handoff".to_string()
+                    })?;
+                ("codex".into(), Some(target.id), "auto".into(), None)
+            } else {
+                return Err("No available Claude or Codex provider remains".into());
+            }
         };
-        Self::queue_account_handoff(
+        Self::queue_provider_handoff(
             manager,
             app,
             session_id,
+            target_provider_id,
             target_account_id,
             model,
             effort,
@@ -662,6 +789,154 @@ impl SessionManager {
         automatic: bool,
         user_message: Option<String>,
     ) -> Result<(), String> {
+        let target_provider_id = {
+            let session_manager = manager.read().unwrap_or_else(|error| error.into_inner());
+            session_manager
+                .db
+                .get_session(session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "Session not found".to_string())?
+                .provider
+        };
+        Self::queue_provider_handoff(
+            manager,
+            app,
+            session_id,
+            target_provider_id,
+            Some(target_account_id),
+            model,
+            effort,
+            registry,
+            automatic,
+            user_message,
+        )
+    }
+
+    /// Resume a local session with another CLI provider using the existing worktree and task packet.
+    /// @param manager Shared session state.
+    /// @param app Tauri event emitter.
+    /// @param session_id Session whose conversation remains visible.
+    /// @param target_provider_id Provider selected for the next turn.
+    /// @param registry Available provider launchers.
+    /// @return Success when the handoff is scheduled.
+    /// @throws String If the provider is unavailable or the session is still processing.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    pub fn begin_provider_handoff(
+        manager: Arc<RwLock<SessionManager>>,
+        app: AppHandle,
+        session_id: SessionId,
+        target_provider_id: String,
+        registry: Arc<ProviderRegistry>,
+    ) -> Result<(), String> {
+        if !matches!(target_provider_id.as_str(), "codex" | "claude-code") {
+            return Err("Only Claude Code and Codex can be switched here".into());
+        }
+        {
+            let session_manager = manager.read().unwrap_or_else(|error| error.into_inner());
+            let session = session_manager
+                .db
+                .get_session(session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "Session not found".to_string())?;
+            if session.provider == target_provider_id {
+                return Err("Session already uses this provider".into());
+            }
+        }
+        let target_account_id = if target_provider_id == "codex" {
+            let m = manager.read().unwrap_or_else(|error| error.into_inner());
+            let session =
+                m.db.get_session(session_id)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "Session not found".to_string())?;
+            let source_account_id = session.provider_account_id.as_deref().unwrap_or("");
+            m.db.next_auto_handoff_account("codex", "local", source_account_id)
+                .map_err(|error| error.to_string())?
+                .or_else(|| {
+                    session
+                        .project_id
+                        .and_then(|project_id| {
+                            m.db.resolve_default_provider_account(project_id, "codex")
+                                .ok()
+                                .flatten()
+                        })
+                        .and_then(|account_id| {
+                            m.db.get_provider_account(&account_id).ok().flatten()
+                        })
+                        .filter(|account| {
+                            account.id != source_account_id
+                                && matches!(
+                                    account.status,
+                                    crate::models::AccountStatus::Available
+                                        | crate::models::AccountStatus::Busy
+                                        | crate::models::AccountStatus::NearLimit
+                                )
+                        })
+                })
+                .or_else(|| {
+                    m.db.list_provider_accounts()
+                        .ok()?
+                        .into_iter()
+                        .find(|account| {
+                            account.provider_id == "codex"
+                                && account.execution_scope == "local"
+                                && account.id != source_account_id
+                                && matches!(
+                                    account.status,
+                                    crate::models::AccountStatus::Available
+                                        | crate::models::AccountStatus::Busy
+                                        | crate::models::AccountStatus::NearLimit
+                                )
+                        })
+                })
+                .map(|account| account.id)
+                .ok_or_else(|| "Configure an available Codex account for this project".to_string())?
+                .into()
+        } else {
+            None
+        };
+        Self::queue_provider_handoff(
+            manager,
+            app,
+            session_id,
+            target_provider_id,
+            target_account_id,
+            "auto".into(),
+            None,
+            registry,
+            false,
+            None,
+        )
+    }
+
+    /// Stage a provider transition and commit ownership only after its process starts.
+    /// @param manager Shared session state.
+    /// @param app Tauri event emitter.
+    /// @param session_id Existing conversation.
+    /// @param target_provider_id Provider for the next turn.
+    /// @param target_account_id Optional local account for that provider.
+    /// @param model Provider-specific model.
+    /// @param effort Provider-specific reasoning effort.
+    /// @param registry Provider launchers.
+    /// @param automatic Whether quota exhaustion requested the transition.
+    /// @param user_message Optional instruction typed while paused.
+    /// @return Success when a new process is scheduled.
+    /// @throws String If the worktree or target is not eligible.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    #[allow(clippy::too_many_arguments)]
+    fn queue_provider_handoff(
+        manager: Arc<RwLock<SessionManager>>,
+        app: AppHandle,
+        session_id: SessionId,
+        target_provider_id: String,
+        target_account_id: Option<String>,
+        model: String,
+        effort: Option<String>,
+        registry: Arc<ProviderRegistry>,
+        automatic: bool,
+        user_message: Option<String>,
+    ) -> Result<(), String> {
         let prompt = {
             let mut session_manager = manager.write().unwrap_or_else(|error| error.into_inner());
             if (!automatic && session_manager.spawning_sessions.contains(&session_id))
@@ -676,40 +951,59 @@ impl SessionManager {
                 .get_session(session_id)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "Session not found".to_string())?;
+            if session_manager.spawning_sessions.contains(&session_id) && !automatic {
+                return Err("Wait for the current provider turn to finish".into());
+            }
             if !matches!(
                 session.status,
                 crate::models::SessionStatus::NeedsAccountAction
                     | crate::models::SessionStatus::ReadyToResume
+                    | crate::models::SessionStatus::Completed
+                    | crate::models::SessionStatus::Stopped
+                    | crate::models::SessionStatus::Error
             ) {
-                return Err("Account handoff requires a session paused for account action".into());
+                return Err("Wait for the current provider turn to finish".into());
             }
             if session.ssh_host.is_some() {
                 return Err("Local account handoff cannot change remote SSH credentials".into());
             }
-            let account = session_manager
-                .db
-                .get_provider_account(&target_account_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "Target account not found".to_string())?;
-            if account.provider_id != session.provider || account.execution_scope != "local" {
-                return Err("Target account is incompatible with this session".into());
+            if !matches!(target_provider_id.as_str(), "codex" | "claude-code")
+                || registry.resolve(&target_provider_id).is_none()
+            {
+                return Err("Target provider is unavailable".into());
             }
-            let recent_summary = session_manager
+            if let Some(ref account_id) = target_account_id {
+                let account = session_manager
+                    .db
+                    .get_provider_account(account_id)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "Target account not found".to_string())?;
+                if account.provider_id != target_provider_id
+                    || account.execution_scope != "local"
+                    || !matches!(
+                        account.status,
+                        crate::models::AccountStatus::Available
+                            | crate::models::AccountStatus::Busy
+                            | crate::models::AccountStatus::NearLimit
+                    )
+                {
+                    return Err("Target account is incompatible or unavailable".into());
+                }
+            } else if target_provider_id != "claude-code" {
+                return Err("Codex requires an available local account".into());
+            }
+            let recent_entries = session_manager
                 .journal_states
                 .get(&session_id)
-                .and_then(|state| {
-                    state.entries.iter().rev().find(|entry| {
-                        entry.entry_type == crate::models::JournalEntryType::Assistant
-                            && entry.text.is_some()
-                    })
-                })
-                .and_then(|entry| entry.text.as_deref());
+                .map(|state| state.entries.as_slice())
+                .unwrap_or_default();
             let prompt = build_account_handoff_packet(
                 &session_manager.db,
                 &session,
-                recent_summary,
+                recent_entries,
                 user_message.as_deref(),
             );
+            let previous_status = session.status.clone();
             session_manager
                 .active
                 .entry(session_id)
@@ -724,7 +1018,9 @@ impl SessionManager {
             session_manager.pending_account_handoffs.insert(
                 session_id,
                 PendingAccountHandoff {
+                    target_provider_id,
                     target_account_id,
+                    previous_status,
                     model,
                     effort,
                     automatic,
@@ -806,7 +1102,10 @@ impl SessionManager {
                     .as_ref()
                     .map(|handoff| handoff.model.clone())
                     .unwrap_or_else(|| a.session.model.clone().unwrap_or_default());
-                let pid_str = a.session.provider.clone();
+                let pid_str = pending_handoff
+                    .as_ref()
+                    .map(|handoff| handoff.target_provider_id.clone())
+                    .unwrap_or_else(|| a.session.provider.clone());
 
                 let spawn_mode = match (a.session.ssh_host.clone(), a.session.ssh_user.clone()) {
                     (Some(host), Some(user)) => crate::services::ssh::SpawnMode::Ssh { host, user },
@@ -872,7 +1171,7 @@ impl SessionManager {
                     pending_handoff
                         .as_ref()
                         .map(|handoff| handoff.target_account_id.clone())
-                        .or_else(|| a.session.provider_account_id.clone()),
+                        .unwrap_or_else(|| a.session.provider_account_id.clone()),
                     pending_handoff,
                 )
             }
@@ -923,10 +1222,11 @@ impl SessionManager {
                     account.profile_home.map(std::path::PathBuf::from)
                 }
                 _ => {
-                    let _ = db.update_session_status(
-                        session_id,
-                        crate::models::SessionStatus::NeedsAccountAction,
-                    );
+                    let next_status = pending_handoff
+                        .as_ref()
+                        .map(|handoff| handoff.previous_status.clone())
+                        .unwrap_or(crate::models::SessionStatus::NeedsAccountAction);
+                    let _ = db.update_session_status(session_id, next_status.clone());
                     let _ = app.emit(
                         if pending_handoff.is_some() {
                             "session:handoff-failed"
@@ -935,15 +1235,15 @@ impl SessionManager {
                         },
                         serde_json::json!({
                             "sessionId": session_id,
-                            "error": "Bound provider account is missing or incompatible"
+                            "error": "Bound provider account is missing or incompatible",
+                            "status": next_status.as_str()
                         }),
                     );
                     let mut m = manager.write().unwrap_or_else(|e| e.into_inner());
                     m.spawning_sessions.remove(&session_id);
                     m.pending_account_handoffs.remove(&session_id);
                     if let Some(active_session) = m.active.get_mut(&session_id) {
-                        active_session.session.status =
-                            crate::models::SessionStatus::NeedsAccountAction;
+                        active_session.session.status = next_status;
                     }
                     return;
                 }
@@ -953,16 +1253,12 @@ impl SessionManager {
         };
 
         // 4. Set context window from provider
-        {
+        if pending_handoff.is_none() {
             let mut m = manager.write().unwrap_or_else(|e| e.into_inner());
             if let Some(state) = m.journal_states.get_mut(&session_id) {
                 if let Some(ctx) = provider.context_window(&model) {
                     state.context_window = Some(ctx);
                 }
-                // Quota windows describe the account this process runs under. After an
-                // account handoff the session keeps its journal state, so stale windows
-                // would be re-recorded against the new account and exhaust it on sight.
-                state.rate_limit.clear();
                 if matches!(
                     state.attention.reason,
                     Some(crate::models::AttentionReason::RateLimit)
@@ -1036,25 +1332,30 @@ impl SessionManager {
         }
 
         let selected_model = spawn_config.model.clone();
+        let handoff_failure_status = pending_handoff
+            .as_ref()
+            .map(|handoff| handoff.previous_status.clone());
         let mut handle = match provider.spawn(spawn_config) {
             Ok(h) => h,
             Err(e) => {
-                let next_status = if pending_handoff.is_some() {
-                    crate::models::SessionStatus::NeedsAccountAction
-                } else {
-                    crate::models::SessionStatus::Error
-                };
+                let next_status = handoff_failure_status
+                    .clone()
+                    .unwrap_or(crate::models::SessionStatus::Error);
                 let _ = db.update_session_status(session_id, next_status);
                 {
                     let mut m = manager.write().unwrap_or_else(|e| e.into_inner());
                     m.spawning_sessions.remove(&session_id);
                     m.pending_account_handoffs.remove(&session_id);
                     if let Some(a) = m.active.get_mut(&session_id) {
-                        a.session.attention = Some(crate::models::AttentionState {
-                            requires_attention: true,
-                            reason: Some(crate::models::AttentionReason::Error),
-                            since: Some(chrono::Utc::now().to_rfc3339()),
-                        });
+                        if let Some(ref status) = handoff_failure_status {
+                            a.session.status = status.clone();
+                        } else {
+                            a.session.attention = Some(crate::models::AttentionState {
+                                requires_attention: true,
+                                reason: Some(crate::models::AttentionReason::Error),
+                                since: Some(chrono::Utc::now().to_rfc3339()),
+                            });
+                        }
                     }
                 }
                 let _ = app.emit(
@@ -1064,7 +1365,8 @@ impl SessionManager {
                         "session:error"
                     },
                     serde_json::json!({
-                        "sessionId": session_id, "error": e
+                        "sessionId": session_id, "error": e,
+                        "status": handoff_failure_status.as_ref().map(|status| status.as_str())
                     }),
                 );
                 return;
@@ -1072,21 +1374,24 @@ impl SessionManager {
         };
 
         if let Some(handoff) = pending_handoff {
-            if let Err(error) = verify_codex_handoff_started(&mut handle) {
+            if let Err(error) =
+                verify_provider_handoff_started(&mut handle, &handoff.target_provider_id)
+            {
                 let _ = handle.child.kill();
                 let _ = handle.child.wait();
-                let _ = db.update_session_status(
-                    session_id,
-                    crate::models::SessionStatus::NeedsAccountAction,
-                );
+                let _ = db.update_session_status(session_id, handoff.previous_status.clone());
                 let mut session_manager = manager
                     .write()
                     .unwrap_or_else(|lock_error| lock_error.into_inner());
                 session_manager.spawning_sessions.remove(&session_id);
                 session_manager.pending_account_handoffs.remove(&session_id);
+                if let Some(active_session) = session_manager.active.get_mut(&session_id) {
+                    active_session.session.status = handoff.previous_status.clone();
+                }
                 let _ = app.emit(
                     "session:handoff-failed",
-                    serde_json::json!({ "sessionId": session_id, "error": error }),
+                    serde_json::json!({ "sessionId": session_id, "error": error,
+                        "status": handoff.previous_status.as_str() }),
                 );
                 return;
             }
@@ -1101,10 +1406,11 @@ impl SessionManager {
             } else {
                 "handoff_to"
             };
-            if let Err(error) = db.commit_session_account_handoff_with_event(
+            if let Err(error) = db.commit_session_provider_handoff(
                 session_id,
                 previous_account_id.as_deref(),
-                &handoff.target_account_id,
+                &handoff.target_provider_id,
+                handoff.target_account_id.as_deref(),
                 &selected_model,
                 target_event,
             ) {
@@ -1113,20 +1419,40 @@ impl SessionManager {
                 let mut m = manager.write().unwrap_or_else(|e| e.into_inner());
                 m.spawning_sessions.remove(&session_id);
                 m.pending_account_handoffs.remove(&session_id);
+                if let Some(active_session) = m.active.get_mut(&session_id) {
+                    active_session.session.status = handoff.previous_status.clone();
+                }
                 let _ = app.emit(
                     "session:handoff-failed",
-                    serde_json::json!({ "sessionId": session_id, "error": error.to_string() }),
+                    serde_json::json!({ "sessionId": session_id, "error": error.to_string(),
+                        "status": handoff.previous_status.as_str() }),
                 );
                 return;
             }
             {
                 let mut m = manager.write().unwrap_or_else(|e| e.into_inner());
                 if let Some(active_session) = m.active.get_mut(&session_id) {
-                    active_session.session.provider_account_id =
-                        Some(handoff.target_account_id.clone());
-                    active_session.session.model = Some(selected_model);
+                    active_session.session.provider_account_id = handoff.target_account_id.clone();
+                    active_session.session.provider = handoff.target_provider_id.clone();
+                    active_session.session.model = Some(selected_model.clone());
                     active_session.claude_session_id = None;
                     active_session.effort = handoff.effort;
+                }
+                if let Some(journal_state) = m.journal_states.get_mut(&session_id) {
+                    journal_state.input_tokens = 0;
+                    journal_state.output_tokens = 0;
+                    journal_state.cache_read = 0;
+                    journal_state.cache_write = 0;
+                    journal_state.model = None;
+                    journal_state.rate_limit.clear();
+                    if let Some(context_window) = provider.context_window(&selected_model) {
+                        journal_state.context_window = Some(context_window);
+                    }
+                    journal_state.attention = crate::models::AttentionState {
+                        requires_attention: false,
+                        reason: None,
+                        since: None,
+                    };
                 }
                 m.pending_account_handoffs.remove(&session_id);
             }
@@ -1135,6 +1461,8 @@ impl SessionManager {
                 serde_json::json!({
                     "sessionId": session_id,
                     "providerAccountId": handoff.target_account_id,
+                    "provider": handoff.target_provider_id,
+                    "model": selected_model,
                 }),
             );
         }
@@ -1403,6 +1731,38 @@ impl SessionManager {
                             "session:rate-limit",
                             serde_json::json!({ "sessionId": session_id }),
                         );
+                    }
+
+                    if let Some(window) = claude_exhausted_window(&trimmed) {
+                        let provider = manager
+                            .read()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .active
+                            .get(&session_id)
+                            .map(|active| active.session.provider.clone());
+                        if provider.as_deref() == Some("claude-code") {
+                            let exhausted = crate::models::QuotaWindow {
+                                utilization: 1.0,
+                                resets_at: None,
+                                status: Some("exceeded".into()),
+                            };
+                            let quota = crate::models::ProviderQuota {
+                                provider: "claude-code".into(),
+                                account_key: "default".into(),
+                                provider_account_id: None,
+                                five_hour: (window == "five_hour").then_some(exhausted.clone()),
+                                seven_day: (window == "seven_day").then_some(exhausted),
+                                updated_at: chrono::Utc::now().to_rfc3339(),
+                                source: "cli_error".into(),
+                            };
+                            let _ = db.record_provider_quota(&quota);
+                            let _ = db.update_session_status(
+                                session_id,
+                                crate::models::SessionStatus::NeedsAccountAction,
+                            );
+                            let _ = app.emit("provider:quota-updated", &quota);
+                            quota_exhausted = true;
+                        }
                     }
 
                     let _ = db.insert_output(session_id, &trimmed);
@@ -1728,6 +2088,10 @@ impl SessionManager {
                     let _ = app.emit("session:state", &state_event);
                     if plan_quota_exhausted {
                         quota_exhausted = true;
+                        let _ = child.kill();
+                        break;
+                    }
+                    if quota_exhausted {
                         let _ = child.kill();
                         break;
                     }
@@ -2490,10 +2854,66 @@ fn is_rate_limit_line(line: &str) -> bool {
     matches!(error_type, "rate_limit_error" | "overloaded_error")
 }
 
+/// Classify an explicit Claude plan-usage error without treating temporary overloads as exhaustion.
+/// @param line One structured Claude CLI output line.
+/// @return The exhausted plan window, if the error states one.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-28
+fn claude_exhausted_window(line: &str) -> Option<&'static str> {
+    let event: serde_json::Value = serde_json::from_str(line).ok()?;
+    let message = if event.get("type")?.as_str()? == "error"
+        && event.get("error")?.get("type")?.as_str()? == "rate_limit_error"
+    {
+        event.get("error")?.get("message")?.as_str()?
+    } else {
+        return None;
+    };
+    let message = message.to_ascii_lowercase();
+    if message.contains("weekly limit") || message.contains("7-day limit") {
+        Some("seven_day")
+    } else if message.contains("usage limit")
+        || message.contains("you've hit your limit")
+        || message.contains("you have hit your limit")
+        || message.contains("5-hour limit")
+        || message.contains("5 hour limit")
+    {
+        Some("five_hour")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::{assistant_with_tokens, make_db, seed_outputs, seed_session, TestCase};
+
+    /// Switch only on explicit Claude subscription-limit errors.
+    /// @return No value; assertions cover quota and temporary overload lines.
+    /// @throws Panic If the classifier misidentifies an error.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    #[test]
+    fn should_classify_claude_plan_exhaustion_only() {
+        assert_eq!(
+            claude_exhausted_window(
+                r#"{"type":"error","error":{"type":"rate_limit_error","message":"You've hit your 5-hour usage limit"}}"#
+            ),
+            Some("five_hour")
+        );
+        assert_eq!(
+            claude_exhausted_window(
+                r#"{"type":"error","error":{"type":"rate_limit_error","message":"Weekly limit reached"}}"#
+            ),
+            Some("seven_day")
+        );
+        assert_eq!(
+            claude_exhausted_window(
+                r#"{"type":"error","error":{"type":"overloaded_error","message":"usage limit"}}"#
+            ),
+            None
+        );
+    }
 
     /// A message typed while the session was paused must survive the account switch.
     ///
@@ -2507,11 +2927,11 @@ mod tests {
         let session_id = seed_session(&db);
         let session = db.get_session(session_id).unwrap().unwrap();
 
-        let without = build_account_handoff_packet(&db, &session, None, None);
+        let without = build_account_handoff_packet(&db, &session, &[], None);
         assert!(without.contains("Continue the outstanding work"));
         assert!(!without.contains("next instruction"));
 
-        let with = build_account_handoff_packet(&db, &session, None, Some("  run the tests  "));
+        let with = build_account_handoff_packet(&db, &session, &[], Some("  run the tests  "));
         assert!(
             with.contains("run the tests"),
             "the pending message must reach the new process"
@@ -2519,7 +2939,7 @@ mod tests {
         assert!(!with.contains("  run the tests  "), "message is trimmed");
 
         // Whitespace-only input is not an instruction.
-        let blank = build_account_handoff_packet(&db, &session, None, Some("   "));
+        let blank = build_account_handoff_packet(&db, &session, &[], Some("   "));
         assert!(blank.contains("Continue the outstanding work"));
     }
 

@@ -96,6 +96,20 @@
     }
   }
 
+  /** Display elapsed working time in seconds, minutes, and hours.
+   * @param elapsedSeconds Whole seconds spent on the current turn.
+   * @return Compact elapsed time with units grouped at each minute and hour.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-28
+   */
+  function formatWorkingTime(elapsedSeconds: number): string {
+    const hours = Math.floor(elapsedSeconds / 3600);
+    const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+    const seconds = elapsedSeconds % 60;
+    if (hours) return `${hours}h ${minutes}m ${seconds}s`;
+    return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  }
+
   /** Release the working-state timer when this feed is destroyed.
    * @return No value; timer state is reset.
    * @author ductv <ductv@getflycrm.com>
@@ -518,7 +532,7 @@
           </div>
           <div class="working-pill" role="status" aria-live="polite">
             <span class="working-word">working</span>
-            <span class="working-elapsed" aria-hidden="true">· {workingElapsedSeconds}s</span>
+            <span class="working-elapsed" aria-hidden="true">· {formatWorkingTime(workingElapsedSeconds)}</span>
             <span class="typing-dots" aria-hidden="true">
               <span class="dot"></span>
               <span class="dot"></span>

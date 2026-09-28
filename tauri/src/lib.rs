@@ -336,6 +336,7 @@ pub fn run() {
             commands::accounts::remove_provider_account,
             commands::accounts::get_account_models,
             commands::accounts::switch_session_provider_account,
+            commands::accounts::switch_session_provider,
             commands::accounts::get_session_account_history,
             ipc::updater::check_update,
             ipc::updater::install_update,

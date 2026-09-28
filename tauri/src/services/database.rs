@@ -2051,12 +2051,46 @@ impl DatabaseService {
         model: &str,
         target_event: &str,
     ) -> SqlResult<()> {
+        let provider = self
+            .get_session(session_id)?
+            .map(|session| session.provider)
+            .unwrap_or_default();
+        self.commit_session_provider_handoff(
+            session_id,
+            previous_account_id,
+            &provider,
+            Some(next_account_id),
+            model,
+            target_event,
+        )
+    }
+
+    /// Atomically bind the session to its next provider and optional account.
+    /// @param session_id Session being continued.
+    /// @param previous_account_id Account used by the previous provider turn.
+    /// @param next_provider_id Provider that started the new turn.
+    /// @param next_account_id Optional local account; Claude may use its default CLI login.
+    /// @param model Model used for the new turn.
+    /// @param target_event Audit event identifying the handoff.
+    /// @return Success after session binding and history are committed.
+    /// @throws rusqlite::Error If SQLite rejects the transaction.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    pub fn commit_session_provider_handoff(
+        &self,
+        session_id: SessionId,
+        previous_account_id: Option<&str>,
+        next_provider_id: &str,
+        next_account_id: Option<&str>,
+        model: &str,
+        target_event: &str,
+    ) -> SqlResult<()> {
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let transaction = conn.transaction()?;
         transaction.execute(
-            "UPDATE sessions SET provider_account_id = ?1, model = ?2,
-             claude_session_id = NULL, updated_at = datetime('now') WHERE id = ?3",
-            params![next_account_id, model, session_id],
+            "UPDATE sessions SET provider_account_id = ?1, provider = ?2, model = ?3,
+             claude_session_id = NULL, updated_at = datetime('now') WHERE id = ?4",
+            params![next_account_id, next_provider_id, model, session_id],
         )?;
         if let Some(previous_account_id) = previous_account_id {
             transaction.execute(
@@ -2065,15 +2099,17 @@ impl DatabaseService {
                 params![session_id, previous_account_id],
             )?;
         }
-        transaction.execute(
-            "INSERT INTO session_account_history (session_id, account_id, event)
-             VALUES (?1, ?2, ?3)",
-            params![session_id, next_account_id, target_event],
-        )?;
-        transaction.execute(
-            "UPDATE provider_accounts SET last_used_at = datetime('now') WHERE id = ?1",
-            params![next_account_id],
-        )?;
+        if let Some(next_account_id) = next_account_id {
+            transaction.execute(
+                "INSERT INTO session_account_history (session_id, account_id, event)
+                 VALUES (?1, ?2, ?3)",
+                params![session_id, next_account_id, target_event],
+            )?;
+            transaction.execute(
+                "UPDATE provider_accounts SET last_used_at = datetime('now') WHERE id = ?1",
+                params![next_account_id],
+            )?;
+        }
         transaction.commit()
     }
 
@@ -2528,6 +2564,42 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(next.id, "profile-a", "a reset account must be reusable");
+    }
+
+    /// Keep the session identity while changing provider and clear stale account attribution.
+    /// @return No value; assertions verify persisted ownership after both directions.
+    /// @throws Panic If the database fails to commit either handoff.
+    /// @author ductv <ductv@getflycrm.com>
+    /// @since 2026-09-28
+    #[test]
+    fn should_switch_session_provider_without_reassigning_old_usage() {
+        let database = make_db();
+        let session_id = database
+            .create_session(
+                None,
+                Some("Task"),
+                "/tmp/provider-switch-test",
+                "ignore",
+                Some("auto"),
+                Some("codex"),
+                None,
+                None,
+            )
+            .unwrap();
+        database
+            .commit_session_provider_handoff(
+                session_id,
+                None,
+                "claude-code",
+                None,
+                "auto",
+                "handoff_to",
+            )
+            .unwrap();
+        let session = database.get_session(session_id).unwrap().unwrap();
+        assert_eq!(session.provider, "claude-code");
+        assert_eq!(session.provider_account_id, None);
+        assert_eq!(session.model.as_deref(), Some("auto"));
     }
 
     // ── Projects ─────────────────────────────────────────────────────────

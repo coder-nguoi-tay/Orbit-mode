@@ -388,19 +388,20 @@
       });
     });
 
-    const u16 = onSessionAccountChanged(({ sessionId, providerAccountId }) => {
+    const u16 = onSessionAccountChanged(({ sessionId, providerAccountId, provider, model }) => {
       sessions.update((list) =>
-        updateSessionState(list, sessionId, { providerAccountId, status: 'running' })
+        updateSessionState(list, sessionId, { providerAccountId, provider, model, status: 'running' })
       );
       handoffSessionId = null;
       void refreshProviderAccounts();
     });
 
-    const u17 = onSessionHandoffFailed(({ sessionId, error }) => {
+    const u17 = onSessionHandoffFailed(({ sessionId, error, status }) => {
       sessions.update((list) =>
-        updateSessionState(list, sessionId, { status: 'needs_account_action' })
+        updateSessionState(list, sessionId, { status: status || 'needs_account_action' })
       );
-      handoffSessionId = sessionId;
+      handoffSessionId = !status || status === 'needs_account_action' || status === 'ready_to_resume'
+        ? sessionId : null;
       addToast({ type: 'error', message: `Account handoff failed: ${error}`, autoDismiss: false });
     });
 

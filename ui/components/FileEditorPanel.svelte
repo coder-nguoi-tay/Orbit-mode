@@ -303,7 +303,14 @@
     await doOpenFile(rel);
   }
 
-  async function doOpenFile(rel: string) {
+  /** Open the selected file without letting an older read replace a newer selection.
+   * @param rel Relative path chosen in the project explorer.
+   * @return Completion after the selected file is displayed or rejected.
+   * @throws Read failures are shown as a toast for the still-selected file.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-28
+   */
+  async function doOpenFile(rel: string): Promise<void> {
     openPath = rel;
     openContent = '';
     loadingFile = true;
@@ -327,13 +334,16 @@
       return;
     }
 
-    const full = cwd.replace(/\/$/, '') + '/' + rel;
+    const projectCwd = cwd;
+    const full = projectCwd.replace(/\/$/, '') + '/' + rel;
     try {
       const raw = await readFileContent(full);
+      if (openPath !== rel || cwd !== projectCwd) return;
       fileCache.set(rel, raw);
       openContent = raw;
       openLanguage = langFromPath(rel);
     } catch (e: any) {
+      if (openPath !== rel || cwd !== projectCwd) return;
       const errStr = String(e ?? '');
       if (
         errStr.includes('valid UTF-8') ||
@@ -349,11 +359,17 @@
         toast(`Cannot open ${rel}: ${e}`, 'error');
       }
     } finally {
-      loadingFile = false;
+      if (openPath === rel && cwd === projectCwd) loadingFile = false;
     }
   }
 
-  async function saveFile() {
+  /** Persist the current editor snapshot and keep later keystrokes unsaved.
+   * @return Completion after the selected file has been written.
+   * @throws Write failures are shown without clearing the editor's dirty state.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-28
+   */
+  async function saveFile(): Promise<void> {
     if (!openPath || isBinary || saving) return;
     saving = true;
     const full = cwd.replace(/\/$/, '') + '/' + openPath;
@@ -361,8 +377,8 @@
       const val = editorComponent?.getValue() ?? openContent;
       await writeFileContent(full, val);
       fileCache.set(openPath, val); // keep cache in sync after save
-      editorComponent?.markSaved();
-      dirty = false;
+      editorComponent?.markSaved(val);
+      openContent = val;
       toast('File saved successfully', 'success');
     } catch (e) {
       toast(`Save failed: ${e}`, 'error');

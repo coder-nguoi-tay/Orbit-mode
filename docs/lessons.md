@@ -4,6 +4,16 @@ Padrões de erro identificados durante o desenvolvimento. Leia ao início de cad
 
 ---
 
+## Editor Save Baseline
+
+**Regra:** Após salvar, atualizar o conteúdo-base do editor com o snapshot gravado; não substituir o modelo por uma prop antiga nem limpar alterações feitas enquanto a escrita estava pendente.
+
+**Por quê:** O Monaco observava uma prop `content` antiga e recarregava o texto anterior logo após o Save, aparentando desfazer a edição.
+
+**Quando aplicar:** Em qualquer editor controlado por props com salvamento assíncrono e cache de arquivos.
+
+---
+
 ## Quotas por conta
 
 **Regra:** Ao receber um evento de quota de uma janela, preservar a última amostra da outra janela para a mesma conta e indexar o estado por `provider_account_id`.

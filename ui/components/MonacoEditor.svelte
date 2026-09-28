@@ -107,12 +107,18 @@
     });
   }
 
-  export function markSaved() {
+  /** Record the exact content written to disk without discarding edits typed during the save.
+   * @param savedContent Content confirmed by the file writer.
+   * @return No value; updates the editor's dirty state against the saved version.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-28
+   */
+  export function markSaved(savedContent: string): void {
     if (!editor) return;
     const val = editor.getModel()?.getValue() ?? '';
-    _prevContent = val;
-    _dirty = false;
-    dispatch('dirty', { dirty: false });
+    _prevContent = savedContent;
+    _dirty = val !== savedContent;
+    dispatch('dirty', { dirty: _dirty });
   }
 
   export function getValue(): string {

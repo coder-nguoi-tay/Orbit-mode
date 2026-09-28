@@ -11,6 +11,7 @@
   import { messageHistory } from '../lib/stores/history';
   import { sessions, updateSessionState } from '../lib/stores/sessions';
   import { pendingMessages } from '../lib/stores/journal';
+  import { switchSessionProvider } from '../lib/tauri/accounts';
   import { appendSessionFeedMessage } from '../lib/session-feed';
   import { sessionEffort } from '../lib/stores/ui';
   import { compactDensity } from '../lib/stores/preferences';
@@ -35,6 +36,30 @@
   let loadingFilesCwd: string | null = null;
   let picker: SlashCommandPicker;
   let interrupting = false;
+  let switchingProvider = false;
+  let alternateProvider: 'codex' | 'claude-code';
+  $: alternateProvider = provider === 'codex' ? 'claude-code' : 'codex';
+  $: alternateProviderName = alternateProvider === 'codex' ? 'Codex' : 'Claude';
+  $: alternateProviderAvailable = $backendsStore.some(
+    (backend) => backend.id === alternateProvider && backend.cliAvailable
+  );
+
+  /** Continue the same project conversation with the alternate installed CLI.
+   * @return Completion after the backend accepts or rejects the handoff.
+   * @throws Errors are shown in the conversation without changing its provider.
+   * @author ductv <ductv@getflycrm.com>
+   * @since 2026-09-28
+   */
+  async function switchAgent(): Promise<void> {
+    switchingProvider = true;
+    try {
+      await switchSessionProvider(sessionId, alternateProvider);
+    } catch (error) {
+      showChatError(error instanceof Error ? error.message : String(error));
+    } finally {
+      switchingProvider = false;
+    }
+  }
 
   function showChatError(message: string) {
     appendSessionFeedMessage(sessionId, message, { error: true });
@@ -646,6 +671,16 @@ If the user provides neither role nor name nor mission, ask one concise question
 
   <div class="composer-actions">
     <div class="btns">
+      {#if provider === 'codex' || provider === 'claude-code'}
+        <button
+          type="button"
+          class="composer-chip"
+          on:click={switchAgent}
+          disabled={switchingProvider || !alternateProviderAvailable ||
+            ['initializing', 'running', 'working'].includes(sessionStatus)}
+          title="Continue in this project with {alternateProviderName}"
+        >→ {alternateProviderName}</button>
+      {/if}
       <button
         type="button"
         class="composer-chip"

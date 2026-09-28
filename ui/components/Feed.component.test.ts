@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import type { JournalEntry } from '../lib/types';
 
 // --- Mock stores and helpers ---
@@ -172,6 +173,25 @@ describe('Feed', () => {
     expect(getByText('working')).toBeTruthy();
     expect(container.textContent).toContain('· 0s');
     expect(container.querySelector('.typing-dots')).toBeTruthy();
+  });
+
+  it('groups working time into minutes and hours', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(Feed, {
+        props: { entries: [], status: 'working', provider: 'claude-code', cwd: null },
+      });
+      await vi.advanceTimersByTimeAsync(70_000);
+      await tick();
+      expect(container.textContent).toContain('· 1m 10s');
+
+      await vi.advanceTimersByTimeAsync(3_530_000);
+      await tick();
+      expect(container.textContent).toContain('· 1h 0m 0s');
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it('streams only an assistant response appended after the initial history', async () => {

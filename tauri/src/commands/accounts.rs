@@ -187,6 +187,34 @@ pub fn switch_session_provider_account(
     .map_err(IpcError::Other)
 }
 
+/// Continue the current local project conversation with Claude Code or Codex.
+/// @param session_id Existing Orbit session and worktree.
+/// @param target_provider_id CLI provider selected by the user.
+/// @param state Shared session manager.
+/// @param registry Available provider launchers.
+/// @param app Tauri event emitter.
+/// @return Success when a fresh provider turn is scheduled.
+/// @throws IpcError If the session is active or the target has no available account.
+/// @author ductv <ductv@getflycrm.com>
+/// @since 2026-09-28
+#[tauri::command]
+pub fn switch_session_provider(
+    session_id: crate::models::SessionId,
+    target_provider_id: String,
+    state: State<SessionState>,
+    registry: State<ProviderRegistryState>,
+    app: AppHandle,
+) -> Result<(), IpcError> {
+    crate::services::session_manager::SessionManager::begin_provider_handoff(
+        state.0.clone(),
+        app,
+        session_id,
+        target_provider_id,
+        registry.0.clone(),
+    )
+    .map_err(IpcError::Other)
+}
+
 /// Show non-sensitive account transitions for a session.
 ///
 /// @param session_id The Orbit session to inspect.

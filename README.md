@@ -151,6 +151,8 @@ Manage Codex profiles:
 - Enable automatic quota handoff when the current account hits its limit.
 - Track quota per account.
 
+In a local Claude Code or Codex conversation, use the **→ Claude** or **→ Codex** button beside the composer to continue the same worktree with the other CLI. Orbit-mode starts a new provider conversation with the original request, recent user instructions and progress, current Git state, and pending instruction. When an account reports an exhausted plan window, it tries another enabled account in the automatic pool first, then the other provider. Claude Code uses the machine's default CLI login; the destination CLI must be installed and authenticated. An unavailable destination leaves the session paused for manual action.
+
 Full credential actions are available in the desktop app. The web dashboard supports viewing usage and controlling sessions.
 
 ### Danger zone
